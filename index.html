@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Proof</title>
+  <link rel="icon" href="/icon.png">
+</head>
+<body>
+<div id="app">
+  <header class="tb" role="toolbar" aria-label="Main toolbar">
+    <div class="grp">
+      <button class="tbtn" id="bOpen" title="Open a PDF (Ctrl+O)">Open</button>
+      <button class="tbtn" id="bInsert" title="Insert pages from another file (Ctrl+I)">Insert file</button>
+      <button class="tbtn" id="bSave" title="Save (Ctrl+S)">Save</button>
+      <button class="tbtn" id="bSaveAs" title="Save as (Ctrl+Shift+S)">Save as</button>
+      <button class="tbtn" id="bExport" aria-haspopup="menu" title="Export pages">Export<span class="car" aria-hidden="true"></span></button>
+    </div>
+    <div class="grp">
+      <button class="tbtn icon" id="bUndo" title="Undo (Ctrl+Z)" aria-label="Undo" disabled><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 3 2 6.5 5.5 10M2.5 6.5H10a4 4 0 0 1 0 8H7"/></svg></button>
+      <button class="tbtn icon" id="bRedo" title="Redo (Ctrl+Y)" aria-label="Redo" disabled><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10.5 3 14 6.5 10.5 10M13.5 6.5H6a4 4 0 0 0 0 8h3"/></svg></button>
+    </div>
+    <div class="tools" id="tools" role="radiogroup" aria-label="Tools">
+      <button data-t="select" aria-pressed="true" title="Select and move (V)">Select<kbd>V</kbd></button>
+      <button data-t="text" aria-pressed="false" title="Add text (T)">Text<kbd>T</kbd></button>
+      <button data-t="date" aria-pressed="false" title="Stamp today’s date (D)">Date<kbd>D</kbd></button>
+      <button data-t="cover" aria-pressed="false" title="Cover with a box (C)">Cover<kbd>C</kbd></button>
+      <button data-t="redact" aria-pressed="false" title="Redact: remove what’s underneath (R)">Redact<kbd>R</kbd></button>
+      <button data-t="image" aria-pressed="false" title="Place an image (I)">Image<kbd>I</kbd></button>
+      <button data-t="sign" aria-pressed="false" title="Sign (S)">Sign<kbd>S</kbd></button>
+    </div>
+    <div class="grp zoom">
+      <button class="tbtn icon" id="zOut" title="Zoom out (Ctrl+−)" aria-label="Zoom out"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10"/></svg></button>
+      <button class="tbtn zl" id="zLbl" title="Fit width (Ctrl+0) · 100% (Ctrl+1)">Fit</button>
+      <button class="tbtn icon" id="zIn" title="Zoom in (Ctrl+=)" aria-label="Zoom in"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10M8 3v10"/></svg></button>
+    </div>
+  </header>
+
+  <div class="main">
+    <aside class="side" aria-label="Pages">
+      <div class="side-h"><span class="lbl">Pages</span><span class="num" id="sideCount">0</span></div>
+      <div class="thumbs" id="thumbs" tabindex="0"></div>
+    </aside>
+    <main class="view" id="view" tabindex="-1">
+      <div class="pages" id="pages"></div>
+      <div class="empty" id="empty" hidden></div>
+    </main>
+    <aside class="insp" aria-label="Inspector">
+      <nav class="itabs" role="tablist">
+        <button role="tab" data-i="page" aria-selected="true">Page</button>
+        <button role="tab" data-i="form" aria-selected="false">Form<sup id="cFields"></sup></button>
+        <button role="tab" data-i="stamps" aria-selected="false">Stamps<sup id="cStamps"></sup></button>
+        <button role="tab" data-i="doc" aria-selected="false">Document</button>
+      </nav>
+      <div class="ibody" id="ibody"></div>
+    </aside>
+  </div>
+
+  <footer class="status">
+    <span id="stPage">No document</span>
+    <span id="stInfo"></span>
+    <span class="sp"></span>
+    <span id="stState"></span>
+    <span id="stPath" class="path"></span>
+  </footer>
+</div>
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>

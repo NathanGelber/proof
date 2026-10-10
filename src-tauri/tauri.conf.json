@@ -1,0 +1,40 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Proof",
+  "version": "0.1.0",
+  "identifier": "app.proof.pdfbench",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Proof",
+        "width": 1360,
+        "height": 880,
+        "minWidth": 940,
+        "minHeight": 580,
+        "center": true,
+        "dragDropEnabled": true
+      }
+    ],
+    "security": { "csp": null }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "msi"],
+    "publisher": "Proof",
+    "shortDescription": "Merge, edit, sign, fill and redact PDFs",
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico", "icons/icon.png"],
+    "fileAssociations": [
+      { "ext": ["pdf"], "name": "PDF document", "description": "PDF document", "role": "Editor", "mimeType": "application/pdf" }
+    ],
+    "windows": {
+      "nsis": { "installMode": "currentUser" }
+    }
+  }
+}
