@@ -5,7 +5,8 @@ import * as host from '../host.js';
 import { GROUPS, ENTITY_KEYS, PERSON_KEYS, ROLES, SPECIAL_KEYS, DOC_TYPES, docTypeInfo, entityKeys, personKeys, keyDef, keyLabel, roleInfo, newEntity, ENUM_KINDS } from './schema.js';
 import { COUNTRIES } from './countries.js';
 import { K, V, refreshInfo, unlockWith, createWith, lockNow, persist, flush, setValue, computed, rawValue, peopleIn, todayIso, entityById, errKind, errMsg, setSaveErrorHandler, onChange } from './vault.js';
-import { pageLines, describeFields, flatLines, fingerprint } from './extract.js';
+import { pageLines, describeFields, flatLines, fingerprint, sha256 } from './extract.js';
+import { loadOffice, isOfficeName } from './office.js';
 import { localFields, localLines, claudeMatch, claudeRequest, render, placeOnLine, yesNoOption } from './match.js';
 
 let C; // context from main.js
@@ -295,7 +296,8 @@ function ageNote(d) {
   return { text: 'Issue date not set' };
 }
 async function addDocs(ent, owner = '') {
-  const files = await host.pickOpen({ title: 'Add documents to the profile' }); if (!files.length) return;
+  let files = await host.pickOpen({ title: 'Add documents to the profile' }); if (!files.length) return;
+  if (files.some(f => isOfficeName(f.name))) { C.toast('Stored documents are attached to PDFs, so they need to be PDFs or images. Save Word or Excel files as PDF first.', 7000); files = files.filter(f => !isOfficeName(f.name)); if (!files.length) return; }
   const b = C.busy('Encrypting…');
   try {
     for (const f of files) {
@@ -383,7 +385,7 @@ function formsView() {
   const ms = Object.entries(K.P.mappings).sort((a, b) => (b[1].updated || '').localeCompare(a[1].updated || ''));
   return h('section', { class: 'kblock' }, h('h2', {}, 'Saved forms'),
     h('p', { class: 'hint' }, 'Forms Proof recognises. When the same form comes back, your reviewed answers are reused. Forget one to make Proof match it fresh.'),
-    ms.length ? h('div', {}, ms.map(([fp, m]) => h('div', { class: 'file' }, h('span', { class: 'nm', title: m.title }, m.title), h('span', { class: 'pp' }, `${m.kind === 'flat' ? 'flat' : 'fillable'} · ${m.kind === 'flat' ? m.entries.length : Object.keys(m.entries).length} answers · ${fmtDate(m.updated)}`),
+    ms.length ? h('div', {}, ms.map(([fp, m]) => h('div', { class: 'file' }, h('span', { class: 'nm', title: m.title }, m.title), h('span', { class: 'pp' }, `${({ flat: 'flat PDF', acro: 'fillable PDF', docx: 'Word', xlsx: 'Excel' })[m.kind] || m.kind} · ${m.kind === 'flat' ? m.entries.length : Object.keys(m.entries).length} answers · ${fmtDate(m.updated)}`),
       h('button', { class: 'x', 'aria-label': 'Forget ' + m.title, onclick: () => { delete K.P.mappings[fp]; persist(); drawPanel(); } }, '×')))) : h('p', { class: 'hint' }, 'None yet.'));
 }
 
@@ -470,6 +472,20 @@ async function startFill(doc) {
   review({ doc, ent, fields, lines: fl, flat, fp, saved });
 }
 
+/** A Word or Excel form: read it, then review. The answers go into a new copy. */
+export async function openOfficeForm(entry) {
+  if (!(await ensureUnlocked())) return;
+  const ent = curEntity(); if (!ent) { openProfile('identity'); return; }
+  const b = C.busy('Reading the form…'); let od;
+  try { od = await loadOffice(entry.bytes, entry.name); }
+  catch (e) { b.done(); C.toast(e?.message || String(e), 8000); return; }
+  b.done();
+  if (!od.slots.length) { C.toast(`Proof couldn’t find any spots for answers in ${entry.name}: no empty cells beside labels, blanks, form fields or tick boxes.`, 8000); return; }
+  const fp = 'office:' + await sha256(JSON.stringify([od.kind, od.slots.map(s => [s.name, s.left, s.above, s.tip, s.right])]));
+  await refreshInfo().catch(() => {});
+  review({ doc: { name: entry.name, path: entry.path }, ent, fields: od.slots, lines: null, flat: false, office: od, fp, saved: K.P.mappings[fp] });
+}
+
 // ---- review
 function review(R) {
   const { h, modal } = C; const { ent, flat } = R;
@@ -507,7 +523,7 @@ function review(R) {
   const drawSeg = () => seg.replaceChildren(...[['all', 'All'], ['attn', 'Needs a look'], ['none', 'Unmatched']].map(([k, l]) => h('button', { 'aria-pressed': String(filter === k), onclick: () => { filter = k; drawSeg(); draw(); } }, l)));
   drawSeg();
   const m = modal('Fill from profile',
-    h('p', { class: 'hint' }, `${ent.name} → ${R.doc.name}${R.saved ? ` · recognised from ${fmtDate(R.saved.updated)}` : ''}${flat ? ' · no fillable fields: answers are typed onto the page, and you can drag them into place afterwards' : ''}`),
+    h('p', { class: 'hint' }, `${ent.name} → ${R.doc.name}${R.saved ? ` · recognised from ${fmtDate(R.saved.updated)}` : ''}${flat ? ' · no fillable fields: answers are typed onto the page, and you can drag them into place afterwards' : ''}${R.office ? ` · ${R.office.kind === 'xlsx' ? 'Excel' : 'Word'} form: answers go into a copy, the original stays as it is` : ''}`),
     h('div', { class: 'rv-bar' }, canClaude ? cBtn : null, canClaude ? h('button', { class: 'btn quiet', onclick: showSent }, 'What gets sent?') : null, h('span', { class: 'sp' }), seg),
     h('div', { class: 'rv-head' }, h('span', {}, ''), h('span', {}, flat ? 'Line on the form' : 'Field'), h('span', {}, 'Profile item'), h('span', {}, 'Answer'), h('span', {}, '')),
     tbody, datalist,
@@ -532,7 +548,7 @@ function review(R) {
     tbody.replaceChildren(...(vis.length ? vis.map(rowEl) : [h('p', { class: 'hint' }, 'Nothing here.')]));
     const n = rows.filter(r => r.include && r.key).length;
     counts.textContent = `${rows.filter(r => r.key).length} of ${rows.length} matched · ${n} will be filled`;
-    applyBtn.textContent = n ? `Fill ${n}` : 'Fill'; applyBtn.disabled = !n;
+    applyBtn.textContent = R.office ? (n ? `Fill ${n} and save…` : 'Fill and save…') : n ? `Fill ${n}` : 'Fill'; applyBtn.disabled = !n;
   }
   function rowEl(r) {
     const f = r.target; const res = r.key ? render(ent, r.key, r.as, fieldOf(r)) : null;
@@ -552,7 +568,7 @@ function review(R) {
     as.addEventListener('change', () => { r.as = as.value.trim(); r.touched = true; draw(); });
     const fieldCell = flat
       ? h('div', { class: 'rv-f' }, h('b', {}, f.text || '(saved position)'), h('small', {}, `p${f.page}${r.place ? ' · answer ' + ({ right: 'to the right', below: 'below', mark: r.option === '@yesno' ? 'as a tick on yes or no' : 'as a tick on “' + (r.option || '') + '”' })[r.place] : ''}`))
-      : h('div', { class: 'rv-f' }, h('b', {}, fieldLabel(f)), h('small', {}, `p${f.page} · ${f.kind}${f.section ? ' · ' + f.section : ''} · ${f.name}`));
+      : h('div', { class: 'rv-f' }, h('b', {}, fieldLabel(f)), h('small', {}, `${f.where || 'p' + f.page} · ${f.kind}${f.section ? ' · ' + f.section : ''}${f.where ? '' : ' · ' + f.name}`));
     const ans = !r.key ? h('span', { class: 'rv-none' }, 'Not filled')
       : res.missing ? h('span', { class: 'rv-miss' }, 'Not in the profile')
       : h('span', { class: 'rv-ans' + (res.problem ? ' warn' : '') }, res.show, res.problem ? h('small', {}, res.problem) : null);
@@ -602,6 +618,37 @@ function review(R) {
   async function apply() {
     const use = rows.filter(r => r.include && r.key);
     const fields = []; let n = 0; const errs = [];
+    if (R.office) {
+      const values = new Map();
+      for (const r of use) {
+        const res = render(ent, r.key, r.as, r.target);
+        if (res.missing || (res.problem && !res.value && res.value !== false)) { errs.push(r.target.name); continue; }
+        let v = res.value;
+        if (typeof v === 'boolean' && r.target.kind !== 'check') { if (!v) continue; v = 'X'; }
+        // Real numbers in Excel only for numeric items (a percentage); identifiers stay text.
+        if (R.office.kind === 'xlsx' && keyDef(ent, r.key)?.kind === 'number' && /^-?\d+(\.\d+)?$/.test(String(v))) v = Number(v);
+        values.set(r.target.name, v); n++;
+        fields.push(logField(fieldLabel(r.target), r.key, res.show));
+      }
+      const ext = R.office.kind === 'xlsx' ? (/\.xlsm$/i.test(R.doc.name) ? 'xlsm' : 'xlsx') : (/\.docm$/i.test(R.doc.name) ? 'docm' : 'docx');
+      const stem = R.doc.name.replace(/\.[^.]+$/, '');
+      const def = (R.doc.path ? host.joinPath(host.dirName(R.doc.path), '') : '') + `${stem} - filled.${ext}`;
+      const path = await host.pickSave(def, { name: R.office.kind === 'xlsx' ? 'Excel workbook' : 'Word document', ext });
+      if (!path) return;
+      const b = C.busy('Writing…');
+      try { const bytes = await R.office.save(values); await host.writePath(path, bytes); }
+      catch (e) { b.done(); C.toast('Couldn’t save: ' + (e?.message || e), 8000); return; }
+      b.done();
+      const entries = {};
+      for (const r of rows) if (r.include && r.key) entries[r.target.name] = { key: r.key, as: r.as };
+      for (const r of rows) if (r.touched && !r.key) entries[r.target.name] = { skip: true };
+      K.P.mappings[R.fp] = { title: R.doc.name, kind: R.office.kind, updated: todayIso(), entries };
+      K.P.log.unshift({ at: new Date().toISOString(), entity: ent.id, counterparty: cp.value.trim(), file: R.doc.name, fp: R.fp, fields });
+      if (K.P.log.length > 5000) K.P.log.length = 5000;
+      persist(); touch(); m.close();
+      C.toast(`Filled ${n} answers and saved ${path.startsWith('download:') ? path.slice(9) : host.baseName(path)}.${errs.length ? ` ${errs.length} couldn’t be filled.` : ''} The original is untouched.`, 7000);
+      return;
+    }
     C.commit();
     if (!flat) {
       const d = R.doc;
@@ -644,7 +691,7 @@ function review(R) {
   draw();
 }
 
-const fieldLabel = f => (['check', 'radio'].includes(f.kind) && f.kind === 'check' ? f.right || f.tip || f.left || f.inside || f.above : f.tip || f.left || f.above || f.inside || f.right) || f.nice || f.name;
+const fieldLabel = f => (f.kind === 'check' ? (f.where && f.left && f.right ? `${f.left} → ${f.right}` : f.right || f.tip || f.left || f.inside || f.above) : f.tip || f.left || f.above || f.inside || f.right) || f.nice || f.name;
 
 function wrap(text, pos, doc, pageIdx) {
   if (!text.includes('\n') && text.length < 60) return text;

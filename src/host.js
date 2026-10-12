@@ -15,11 +15,11 @@ if (isDesktop) {
   ]);
 }
 
-const OPEN_FILTERS = [{ name: 'PDFs and images', extensions: ['pdf', 'png', 'jpg', 'jpeg'] }];
+const OPEN_FILTERS = [{ name: 'PDFs, images, Word and Excel forms', extensions: ['pdf', 'png', 'jpg', 'jpeg', 'docx', 'xlsx', 'docm', 'xlsm'] }];
 export const baseName = p => p.split(/[\\/]/).pop();
 export const dirName = p => { const i = Math.max(p.lastIndexOf('\\'), p.lastIndexOf('/')); return i > 0 ? p.slice(0, i) : ''; };
 export const joinPath = (dir, name) => dir + (dir.includes('\\') ? '\\' : '/') + name;
-const mimeOf = name => /\.png$/i.test(name) ? 'image/png' : /\.jpe?g$/i.test(name) ? 'image/jpeg' : 'application/pdf';
+export const mimeOf = name => /\.png$/i.test(name) ? 'image/png' : /\.jpe?g$/i.test(name) ? 'image/jpeg' : /\.(docx|docm)$/i.test(name) ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' : /\.(xlsx|xlsm)$/i.test(name) ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'application/pdf';
 
 export async function readPath(path) {
   const buf = await core.invoke('read_file', { path });
@@ -35,7 +35,7 @@ export async function pickOpen({ multiple = true, title } = {}) {
     return Promise.all(paths.map(async path => ({ name: baseName(path), path, type: mimeOf(path), bytes: await readPath(path) })));
   }
   return new Promise(resolve => {
-    const inp = Object.assign(document.createElement('input'), { type: 'file', multiple, accept: 'application/pdf,.pdf,image/png,image/jpeg' });
+    const inp = Object.assign(document.createElement('input'), { type: 'file', multiple, accept: 'application/pdf,.pdf,image/png,image/jpeg,.docx,.xlsx,.docm,.xlsm' });
     inp.onchange = async () => resolve(await Promise.all([...inp.files].map(fileEntry)));
     inp.oncancel = () => resolve([]);
     inp.click();
@@ -99,7 +99,7 @@ export function onDrop(cb, hover) {
       else if (t === 'leave') hover(false);
       else if (t === 'drop') {
         hover(false);
-        const paths = (e.payload.paths || []).filter(p => /\.(pdf|png|jpe?g)$/i.test(p));
+        const paths = (e.payload.paths || []).filter(p => /\.(pdf|png|jpe?g|docx|xlsx|docm|xlsm)$/i.test(p));
         if (paths.length) cb(await Promise.all(paths.map(async path => ({ name: baseName(path), path, type: mimeOf(path), bytes: await readPath(path) }))));
       }
     });

@@ -6,7 +6,8 @@ import '@fontsource/mrs-saint-delafield/400.css';
 import './style.css';
 import Sortable from 'sortablejs';
 import * as host from './host.js';
-import { initKyc, formSection, openProfile } from './kyc/ui.js';
+import { initKyc, formSection, openProfile, openOfficeForm } from './kyc/ui.js';
+import { isOfficeName } from './kyc/office.js';
 import { pdfjsLib, mupdf, prepare, inspect, imageToPdf, compose, finalize, renderPngs, splitPages, blankPdf, samplePdf, Cancelled } from './engine.js';
 
 mupdf(); // start loading the engine in the background
@@ -150,7 +151,16 @@ function resetWorkspace() {
 }
 
 /** Open entries as a new document (replacing the current one). */
+/** Word and Excel forms go straight to Fill from profile. Returns the entries that are left. */
+async function takeOffice(entries) {
+  const off = entries.filter(e => isOfficeName(e.name)); if (!off.length) return entries;
+  if (off.length > 1) toast(`Opening ${off[0].name}. Word and Excel forms are filled one at a time.`, 5000);
+  await openOfficeForm(off[0]);
+  return entries.filter(e => !isOfficeName(e.name));
+}
+
 async function openEntries(entries) {
+  entries = await takeOffice(entries);
   if (!entries.length) return;
   if (!(await confirmDiscard())) return;
   const b = busy('Opening…'); const notes = []; const loaded = [];
@@ -173,6 +183,7 @@ async function openEntries(entries) {
 
 /** Insert entries' pages after the selection / current page, or at the end. */
 async function insertEntries(entries, at) {
+  entries = await takeOffice(entries);
   if (!entries.length) return;
   if (!S.pages.length) return openEntries(entries);
   const b = busy('Opening…'); const notes = []; const loaded = [];
@@ -195,12 +206,12 @@ function insertionPoint() {
 async function openPaths(paths, mode) {
   const entries = [];
   for (const path of paths) {
-    try { entries.push({ name: host.baseName(path), path, type: 'application/pdf', bytes: await host.readPath(path) }); }
+    try { entries.push({ name: host.baseName(path), path, type: host.mimeOf(path), bytes: await host.readPath(path) }); }
     catch (e) { toast(`Couldn’t open ${host.baseName(path)}: ${e?.message || e}`, 5000); host.forgetRecent(path); }
   }
   if (!entries.length) return;
   if (mode === 'insert') return insertEntries(entries);
-  if (mode === 'ask' && S.pages.length) {
+  if (mode === 'ask' && S.pages.length && !entries.every(e => isOfficeName(e.name))) {
     const choice = await new Promise(resolve => {
       const m = modal('Open',
         h('p', {}, `Open ${entries.map(e => e.name).join(', ')} as its own document, or insert ${entries.length > 1 ? 'their' : 'its'} pages into ${S.title || 'the current document'}?`),
@@ -971,7 +982,7 @@ function renderEmpty() {
     h('div', { class: 'acts' },
       h('button', { class: 'btn primary', onclick: doOpen }, 'Open a PDF'),
       h('button', { class: 'btn', onclick: openSample }, 'Try the sample')),
-    h('p', { class: 'lbl' }, 'Or drop PDFs and images anywhere in this window'),
+    h('p', { class: 'lbl' }, 'Or drop PDFs and images anywhere in this window. Word and Excel forms open straight into Fill from profile.'),
     recent.length ? h('div', { class: 'fld' }, h('span', { class: 'lbl' }, 'Recent'),
       h('div', { class: 'recent' }, recent.map(p => h('button', { title: p, onclick: () => openPaths([p], 'open') }, h('b', {}, host.baseName(p)), h('span', {}, host.dirName(p)))))) : null));
 }

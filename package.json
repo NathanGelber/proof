@@ -1,7 +1,7 @@
 {
   "name": "proof",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -16,6 +16,7 @@
     "@pdf-lib/fontkit": "1.1.1",
     "@tauri-apps/api": "2.12.3",
     "@tauri-apps/plugin-dialog": "2.8.2",
+    "jszip": "3.10.1",
     "mupdf": "1.28.1",
     "pdf-lib": "1.17.1",
     "pdfjs-dist": "3.11.174",

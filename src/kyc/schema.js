@@ -47,7 +47,7 @@ export const ENTITY_KEYS = [
   k('crs_status', 'CRS classification', 'choice', ['crs', 'crs status', 'crs classification', 'entity type under crs'], { group: 'tax', choices: CRS }),
   k('us_person', 'Is a US person', 'bool', ['us person', 'u.s. person', 'specified us person', 'us entity'], { group: 'tax' }),
 
-  k('regulated', 'Is regulated', 'bool', ['regulated', 'regulated entity', 'supervised', 'licensed', 'authorised', 'authorized', 'regulated financial institution'], { group: 'regulation' }),
+  k('regulated', 'Is regulated', 'bool', ['regulated', 'regulated entity', 'supervised', 'licensed', 'authorised', 'authorized', 'regulated financial institution', 'financial supervisor', 'regulated by', 'supervised by', 'subject to supervision', 'under supervision', 'onder toezicht'], { group: 'regulation' }),
   k('regulator', 'Regulator', 'text', ['regulator', 'name of regulator', 'regulatory authority', 'supervisory authority', 'supervisor', 'toezichthouder', 'competent authority'], { group: 'regulation' }),
   k('licence_number', 'Licence or regulator reference', 'text', ['licence number', 'license number', 'regulatory number', 'regulator reference', 'registration number with regulator', 'permit number', 'vergunningnummer', 'frn'], { group: 'regulation' }),
   k('listed', 'Is listed', 'bool', ['listed', 'publicly listed', 'publicly traded', 'listed on a stock exchange', 'quoted', 'beursgenoteerd'], { group: 'regulation' }),

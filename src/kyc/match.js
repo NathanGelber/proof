@@ -72,7 +72,11 @@ export function render(ent, key, as, field) {
 }
 
 // ---------------------------------------------------------------- local matcher
-const SKIP_RE = /\b(signature|signed|handtekening|sign here|initials|paraaf|unterschrift|stamp|stempel)\b/;
+const SKIP_RE = /\b(signature|handtekening|sign here|initials|paraaf|unterschrift|stamp|stempel)\b/;
+// Internal names that say nothing: "Text7", "Check Box12", "Dropdown3".
+const GENERIC_NAME = /^(text|tekst|check ?box|check|selectievakje|dropdown|drop down|list ?box|combo ?box|field|veld|radio ?button|option|button)\s*\d*$/i;
+// "Any director or beneficial owner…" is about the entity, not one person.
+const ABOUT_ALL = /\b(any|all|none|each|every|whether|either)\b/;
 const OFFICE_RE = /\b(for (office|bank|internal|official) use|(office|bank|internal) use only|reserved for|in te vullen door de bank|voor intern gebruik|to be completed by (the )?bank)\b/;
 const ROLE_ALIASES = ROLES.flatMap(r => r.aliases.map(a => [norm(a), r.role])).sort((a, b) => b[0].length - a[0].length);
 
@@ -94,7 +98,7 @@ export function roleIn(...texts) {
 function trailingNumber(...texts) { for (const t of texts) { const m = /(?:^|\D)(\d{1,2})\s*$/.exec(norm(t)); if (m && +m[1] < 20) return +m[1]; } return 0; }
 
 // Words that don't change what a label asks for.
-const FILLER = new Set(['of', 'the', 'entity', 'entitys', 'company', 'companys', 'if', 'applicable', 'different', 'please', 'provide', 'state', 'specify', 'enter', 'your', 'its', 'an', 'a', 'in', 'for', 'to', 'be', 'is', 'are', 'this', 'client', 'customer', 'applicant', 'organisation', 'organization', 'institution', 'details', 'tick', 'one', 'only', 'dd', 'mm', 'yyyy', 'yy', 'jjjj', 'de', 'het', 'van', 'naam', 'and', 'or', 'any', 'if any', 'no', 'nr', 'number', 'optional', 'required', 'mandatory', 'e', 'g', 'eg', 'i', 'yes', 'ja', 'nee', 'oui', 'non']);
+const FILLER = new Set(['of', 'the', 'entity', 'entitys', 'company', 'companys', 'if', 'applicable', 'different', 'please', 'provide', 'state', 'specify', 'enter', 'your', 'its', 'an', 'a', 'in', 'for', 'to', 'be', 'is', 'are', 'this', 'client', 'customer', 'applicant', 'organisation', 'organization', 'institution', 'details', 'tick', 'one', 'only', 'dd', 'mm', 'yyyy', 'yy', 'jjjj', 'de', 'het', 'van', 'naam', 'and', 'or', 'any', 'if any', 'no', 'nr', 'number', 'optional', 'required', 'mandatory', 'e', 'g', 'eg', 'i', 'yes', 'ja', 'nee', 'oui', 'non', 'by', 'door']);
 const ROLE_WORDS = new Set(ROLES.flatMap(r => r.aliases.flatMap(a => norm(a).split(' '))));
 const DIGIT = /^\d+$/;
 
@@ -138,8 +142,10 @@ export function localFields(ent, fields) {
     const all = [f.tip, f.left, f.above, f.inside, f.nice, f.right].map(norm).join(' ');
     if (OFFICE_RE.test(norm(f.section) + ' ' + all)) continue;
     if (f.kind === 'text' && SKIP_RE.test(label + ' ' + norm(f.nice))) continue;
-    const ctx = roleIn(f.left, f.tip, f.above, f.nice) || roleIn(...(f.ctx || [])) || roleIn(f.section);
-    const texts = [[norm(f.tip), 1], [norm(f.left), 0.95], [norm(f.above), 0.9], [norm(f.inside), 0.85], [norm(f.nice), 0.7]];
+    const nice = GENERIC_NAME.test(f.nice || '') ? '' : f.nice;
+    const own = [f.kind === 'check' ? f.right : '', f.left, f.tip, f.above, nice].filter(Boolean);
+    const ctx = own.some(t => ABOUT_ALL.test(norm(t))) ? null : roleIn(...own) || roleIn(...(f.ctx || [])) || roleIn(f.section);
+    const texts = [[norm(f.tip), 1], [norm(f.left), 0.95], [norm(f.above), 0.9], [norm(f.inside), 0.85], [norm(nice), 0.7]];
     if (f.kind === 'check') texts.unshift([norm(f.right), 1]);
     let pick = null, as = '', conf = 'low', note = '';
     // Checkboxes whose label is one of a choice list (FATCA classes, ID types…).
@@ -155,6 +161,11 @@ export function localFields(ent, fields) {
         const ok = d => ['bool', 'choice', 'country'].includes(d.kind) || (f.kind !== 'check' && d.kind !== 'longtext');
         if (b && !ok(b.c)) b = bestKey(texts, cands.filter(ok));
       }
+      // A label that only names a role ("Signed by", "UBO 2:", "Director") wants that person's name.
+      if ((!b || b.score < 14) && ctx && f.kind === 'text') {
+        const words = norm(f.tip || f.left || f.above || '').split(' ').filter(Boolean);
+        if (words.length && words.every(w => ROLE_WORDS.has(w) || FILLER.has(w) || DIGIT.test(w) || ['by', 'name', 'naam', 'signed', 'ondertekend', 'door'].includes(w))) b = { c: Pk.find(d => d.key === 'full_name'), score: 20, exact: false, extra: 1 };
+      }
       if (!b || b.score < 14) continue;
       pick = b;
     }
@@ -162,7 +173,7 @@ export function localFields(ent, fields) {
     let key = d.key;
     if (d.scope === 'person') {
       const role = ctx?.role || 'director';
-      let n = ctx?.n || trailingNumber(f.nice, f.left, f.tip) || 0;
+      let n = ctx?.n || trailingNumber(nice, f.left, f.tip) || 0;
       if (!n) { const blk = role + '|' + f.section; roleCount[role] ||= { blocks: [] }; if (!roleCount[role].blocks.includes(blk)) roleCount[role].blocks.push(blk); n = roleCount[role].blocks.indexOf(blk) + 1; }
       key = `${role}.${n}.${d.key}`;
       if (!ctx) note = 'Assumed this is about a director. Check which person it means.';
@@ -248,7 +259,7 @@ function clean(list, ids, ent) {
 
 export function claudeRequest(ent, { fields, lines, title }) {
   const model = K.P?.settings?.model || 'claude-sonnet-5-5';
-  if (fields) return { model, mode: 'fields', title: title || '', keys: keyCatalog(ent), fields: fields.filter(f => !f.ro).map(f => ({ id: f.id, kind: f.kind, page: f.page, name: f.nice, tip: f.tip, near: f.near, section: f.section, options: f.options })) };
+  if (fields) return { model, mode: 'fields', title: title || '', keys: keyCatalog(ent), fields: fields.filter(f => !f.ro).map(f => ({ id: f.id, kind: f.kind, page: f.page, name: f.where ? [f.where, f.nice].filter(Boolean).join(' · ') : f.nice, tip: f.tip, near: f.near, section: f.section, options: f.options })) };
   return { model, mode: 'lines', title: title || '', keys: keyCatalog(ent), lines: lines.map(l => ({ id: l.id, page: l.page, text: (l.heading ? '## ' : '') + l.text })) };
 }
 
