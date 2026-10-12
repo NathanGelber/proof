@@ -8,6 +8,7 @@ import Sortable from 'sortablejs';
 import * as host from './host.js';
 import { initKyc, formSection, openProfile } from './kyc/ui.js';
 import { startOffice } from './kyc/fill.js';
+import { sigGet, sigSet, sigAvailable } from './kyc/vault.js';
 import { isOfficeName } from './kyc/office.js';
 import { pdfjsLib, mupdf, prepare, inspect, imageToPdf, compose, finalize, renderPngs, splitPages, blankPdf, samplePdf, Cancelled } from './engine.js';
 
@@ -17,7 +18,6 @@ mupdf(); // start loading the engine in the background
 const DPR = () => Math.min(window.devicePixelRatio || 1, 2);
 const PT = 96 / 72; // CSS px per point at 100%
 const FILE_COLORS = ['--f1', '--f2', '--f3', '--f4', '--f5', '--f6'];
-const SIG_KEY = 'proof.signature';
 let uidN = 0; const uid = () => 'u' + (++uidN);
 const defaultStamps = () => ({ header: { text: '', slot: 'tl' }, footer: { text: '', slot: 'bl' }, num: { fmt: 'off', slot: 'bc', start: 1 }, bates: { on: false, prefix: '', start: 1, digits: 6, slot: 'br' }, wm: { text: '', opacity: 0.15 } });
 
@@ -71,8 +71,6 @@ const visDocs = () => S.docs.filter(d => !d.hidden && S.pages.some(p => p.doc ==
 const typing = () => /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName);
 const editCount = () => S.pages.reduce((a, p) => a + p.items.length, 0) + visDocs().reduce((a, d) => a + Object.keys(d.values).length, 0);
 const stampsActive = () => { const s = S.stamps; return !!(s.header.text.trim() || s.footer.text.trim() || s.num.fmt !== 'off' || s.bates.on || s.wm.text.trim()); };
-const lsGet = k => { try { return localStorage.getItem(k); } catch { return null; } };
-const lsSet = (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); return true; } catch { return false; } };
 const blobToDataUrl = blob => new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(blob); });
 
 // ---------------------------------------------------------------- undo
@@ -923,12 +921,13 @@ function trimCanvas(cv) {
 }
 function openSign() {
   const INK = '#10204F', FONT = '"Mrs Saint Delafield", "Segoe Script", cursive';
-  let saved = lsGet(SIG_KEY), mode = saved ? 'saved' : 'draw', inked = false, drawing = false, last = null;
+  let saved = sigGet(), mode = saved ? 'saved' : 'draw', inked = false, drawing = false, last = null;
   const tabs = h('div', { class: 'seg' });
   const pSaved = h('div', { class: 'fld' }), pDraw = h('div', { class: 'fld' }), pType = h('div', { class: 'fld' });
   const cv = h('canvas', { class: 'sig' }), typed = h('input', { type: 'text', id: 'sig-type', placeholder: 'Your name' }), tprev = h('canvas', { class: 'sig', style: 'height:110px' });
-  const remember = h('input', { type: 'checkbox', id: 'sig-rem', checked: true });
-  const remLine = h('label', { class: 'opt', for: 'sig-rem' }, remember, h('div', {}, 'Remember for next time', h('small', {}, 'Stored on this computer only. Replaces any saved signature.')));
+  const canKeep = sigAvailable();
+  const remember = h('input', { type: 'checkbox', id: 'sig-rem', checked: canKeep, disabled: !canKeep });
+  const remLine = h('label', { class: 'opt', for: 'sig-rem' }, remember, h('div', {}, 'Remember for next time', h('small', {}, canKeep ? 'Kept encrypted in your profile. Replaces any saved signature.' : 'Unlock your profile to remember it. It’s kept encrypted there, not on this computer in the open.')));
   pDraw.append(h('span', { class: 'lbl' }, 'Draw with your mouse, pen or finger'), cv, h('div', {}, h('button', { class: 'btn quiet', onclick: () => { cv.getContext('2d').clearRect(0, 0, cv.width, cv.height); inked = false; } }, 'Clear')));
   pType.append(h('label', { class: 'lbl', for: 'sig-type' }, 'Type your name'), typed, tprev);
   const m = modal('Sign', tabs, pSaved, pDraw, pType, remLine,
@@ -936,7 +935,7 @@ function openSign() {
   function renderSaved() {
     pSaved.replaceChildren();
     if (saved) pSaved.append(h('span', { class: 'lbl' }, 'Saved signature'), h('div', { class: 'sigprev' }, h('img', { src: saved, alt: 'Saved signature' })),
-      h('div', {}, h('button', { class: 'btn danger', onclick: () => { lsSet(SIG_KEY, null); saved = null; setMode('draw'); toast('Saved signature removed.'); } }, 'Forget it')));
+      h('div', {}, h('button', { class: 'btn danger', onclick: () => { sigSet(null); saved = null; setMode('draw'); toast('Saved signature removed.'); } }, 'Forget it')));
   }
   function setMode(md) {
     mode = md;
@@ -975,7 +974,7 @@ function openSign() {
       x.font = `120px ${FONT}`; x.fillStyle = INK; x.textBaseline = 'middle'; x.fillText(typed.value, 40, 110); res = trimCanvas(c);
     }
     if (!res) { toast(mode === 'type' ? 'Type your name first.' : 'Draw your signature first.'); return; }
-    if (mode !== 'saved' && remember.checked && !lsSet(SIG_KEY, res.url)) toast('Couldn’t remember the signature on this computer.');
+    if (mode !== 'saved' && remember.checked && sigAvailable()) sigSet(res.url);
     m.close(); placeCentered(res.url, res.aspect);
   }
   setMode(mode);

@@ -17,6 +17,12 @@ How the data is kept apart from the matching:
 - **Storage.** One encrypted file (`kyc.vault`, in the app data folder unless you choose another location) plus a `kyc.vault.files` folder of encrypted documents. Argon2id derives a key from the passphrase that wraps a random data key; XChaCha20-Poly1305 encrypts the profile and each document. Locks after 15 minutes without use. A profile in a shared folder works: Proof refuses to overwrite a file someone else saved after you opened it, and asks.
 - **Matching.** In order: saved forms (a form you filled before), the label library (wording you've confirmed, learned from every fill and seeded with **Profile → Label library → Learn from forms…**), then built-in phrase lists (`src/kyc/match.js`). The optional Claude step only gets what's left. It runs in the Rust backend (`src-tauri/src/matcher.rs`), the only code that can reach the network, and sends only each answer spot's label text plus the *names* of profile items, never values: no file name, letterhead, instructions or surrounding lines. The request types reject unknown fields; emails, URLs, phone and account numbers, dates and long numbers are masked; the counterparty's name and anything matching the unlocked profile are cut (`src-tauri/src/scrub.rs`). **What gets sent?** in the review shows the exact request.
 - **API key.** Stored in Windows Credential Manager by the backend; the page can set it but never read it.
+- **Saved signature.** Kept in the encrypted profile. Older versions stored it in the window's storage; it's moved in and wiped the first time the profile is unlocked.
+- **Files.** The backend only reads PDFs, images, Word, Excel and JSON, and only writes PDFs, PNGs, Word, Excel and JSON, with ordinary full paths. Programs, scripts, shortcuts, device paths and hidden streams are refused. Profile files must end in .vault.
+- **Locking.** The backend locks the profile after 15 minutes without use on its own timer and tells the window, which drops the decrypted copy. New passphrases need 12+ characters and can't be trivially guessable.
+- **Fill record.** Profile → Settings → Fill record sets how long records are kept; older ones are deleted on unlock.
+- **Untrusted files.** Word and Excel files over 50 MB, or that unpack to far more than their size, are refused. pdf.js is 4.10.38 (fixes CVE-2024-4367).
+- **Build.** GitHub Actions are pinned to commit SHAs, the workflow token is read-only, and npm and cargo build exactly what the lockfiles say.
 
 ## Build
 

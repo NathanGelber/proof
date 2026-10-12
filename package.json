@@ -1,7 +1,7 @@
 {
   "name": "proof",
   "private": true,
-  "version": "0.5.0",
+  "version": "0.5.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -19,7 +19,7 @@
     "jszip": "3.10.1",
     "mupdf": "1.28.1",
     "pdf-lib": "1.17.1",
-    "pdfjs-dist": "3.11.174",
+    "pdfjs-dist": "4.10.38",
     "sortablejs": "1.15.0"
   },
   "devDependencies": {

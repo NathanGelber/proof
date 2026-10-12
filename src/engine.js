@@ -4,7 +4,7 @@
 // true redaction, compression, encryption.
 
 import * as pdfjsLib from 'pdfjs-dist';
-import workerUrl from 'pdfjs-dist/build/pdf.worker.min.js?url';
+import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { PDFDocument, PDFName, StandardFonts, rgb, degrees, PDFTextField, PDFCheckBox, PDFDropdown, PDFRadioGroup, PDFOptionList } from 'pdf-lib';
 import fontkit from '@pdf-lib/fontkit';
 import { systemFont } from './host.js';

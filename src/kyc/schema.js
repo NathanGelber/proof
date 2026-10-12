@@ -262,7 +262,7 @@ export function keyLabel(ent, key) {
 }
 
 export function newProfile() {
-  return { schema: 1, entities: [], mappings: {}, log: [], settings: { dateFormat: 'DD-MM-YYYY', model: 'claude-sonnet-5-5', useClaude: true } };
+  return { schema: 1, entities: [], mappings: {}, log: [], settings: { dateFormat: 'DD-MM-YYYY', model: 'claude-sonnet-5-5', useClaude: true, logYears: 0 } };
 }
 export function newEntity(name) {
   return { id: crypto.randomUUID(), name, values: { legal_name: { v: name, at: new Date().toISOString().slice(0, 10), hist: [] } }, custom: [], people: [], docs: [] };

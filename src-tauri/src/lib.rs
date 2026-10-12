@@ -45,16 +45,50 @@ fn launch_files(state: tauri::State<LaunchFiles>) -> Vec<String> {
     std::mem::take(&mut *state.0.lock().unwrap())
 }
 
+/// File types the page may read and write. Anything else (programs, scripts, shortcuts, system
+/// files) is refused, so a compromised page can't drop or read arbitrary files.
+const READ_EXT: &[&str] = &["pdf", "png", "jpg", "jpeg", "docx", "xlsx", "docm", "xlsm", "json"];
+const WRITE_EXT: &[&str] = &["pdf", "png", "json", "docx", "xlsx", "docm", "xlsm"];
+
+fn checked_path(path: &str, allowed: &[&str]) -> Result<PathBuf, String> {
+    let p = PathBuf::from(path);
+    let bad = |why: &str| Err(format!("Proof won't use {path}: {why}."));
+    if path.starts_with("\\\\?\\") || path.starts_with("\\\\.\\") || path.starts_with("//?/") || path.starts_with("//./") {
+        return bad("device paths aren't allowed");
+    }
+    if !p.is_absolute() {
+        return bad("not a full path");
+    }
+    let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    // A colon after the drive letter means an alternate data stream (file.pdf:hidden).
+    if name.contains(':') || name.ends_with('.') || name.ends_with(' ') || name.is_empty() {
+        return bad("not an ordinary file name");
+    }
+    let ext = p.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).unwrap_or_default();
+    if !allowed.contains(&ext.as_str()) {
+        return bad("not a file type Proof works with");
+    }
+    if p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return bad("the path climbs out of its folder");
+    }
+    Ok(p)
+}
+
 #[tauri::command]
 fn read_file(path: String) -> Result<Response, String> {
-    std::fs::read(&path)
+    let p = checked_path(&path, READ_EXT)?;
+    let meta = std::fs::metadata(&p).map_err(|e| format!("Couldn't read {path}: {e}"))?;
+    if meta.len() > 300 * 1024 * 1024 {
+        return Err(format!("{path} is larger than 300 MB."));
+    }
+    std::fs::read(&p)
         .map(Response::new)
         .map_err(|e| format!("Couldn't read {path}: {e}"))
 }
 
 /// Writes the raw request body to the path in the `x-path` header (percent-encoded).
 /// Writes to a temporary file first, then replaces the target, so a failed save never
-/// leaves a half-written PDF behind.
+/// leaves a half-written file behind.
 #[tauri::command]
 fn write_file(request: Request) -> Result<(), String> {
     let raw = request
@@ -64,6 +98,7 @@ fn write_file(request: Request) -> Result<(), String> {
         .to_str()
         .map_err(|e| e.to_string())?;
     let path = percent_decode(raw);
+    checked_path(&path, WRITE_EXT)?;
     let InvokeBody::Raw(bytes) = request.body() else {
         return Err("Expected file contents".into());
     };
@@ -137,6 +172,9 @@ fn vault_info(state: tauri::State<VaultState>) -> VaultInfo {
 #[tauri::command]
 async fn vault_create(app: tauri::AppHandle, state: tauri::State<'_, VaultState>, passphrase: String, initial: String, path: Option<String>) -> Result<(), String> {
     let target = path.map(PathBuf::from).unwrap_or_else(|| configured_vault(&app));
+    if target.extension().map(|e| e != "vault").unwrap_or(true) {
+        return Err("A profile file has to end in .vault.".into());
+    }
     let mut fresh = Vault::new(target.clone());
     let fresh = tauri::async_runtime::spawn_blocking(move || fresh.create(&passphrase, &initial).map(|_| fresh))
         .await
@@ -161,6 +199,9 @@ async fn vault_unlock(state: tauri::State<'_, VaultState>, passphrase: String) -
 #[tauri::command]
 fn vault_use(app: tauri::AppHandle, state: tauri::State<VaultState>, path: String) -> Result<(), String> {
     let p = PathBuf::from(&path);
+    if p.extension().map(|e| e != "vault").unwrap_or(true) {
+        return Err("That isn't a Proof profile (.vault) file.".into());
+    }
     if !p.is_file() {
         return Err(format!("{path} doesn't exist."));
     }
@@ -263,6 +304,20 @@ pub fn run() {
         .setup(|app| {
             let path = configured_vault(app.handle());
             app.manage(VaultState(Mutex::new(Vault::new(path))));
+            // Lock after 15 minutes without use even if the window is hung or hidden, and tell the page.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_secs(20));
+                let st = handle.state::<VaultState>();
+                let locked_now = {
+                    let mut v = st.0.lock().unwrap();
+                    let was = v.data().is_some();
+                    was && !v.check()
+                };
+                if locked_now {
+                    let _ = handle.emit("vault-locked", ());
+                }
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -288,4 +343,20 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Proof");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_access_limits() {
+        assert!(checked_path("/tmp/form.pdf", WRITE_EXT).is_ok());
+        assert!(checked_path("/tmp/Form.XLSX", WRITE_EXT).is_ok());
+        for bad in ["/tmp/evil.exe", "/tmp/run.bat", "/tmp/link.lnk", "/tmp/x.pdf.", "/tmp/x.pdf ", "/tmp/x.pdf:hidden", "/tmp/../etc/x.pdf", "x.pdf", "/tmp/noext"] {
+            assert!(checked_path(bad, WRITE_EXT).is_err(), "{bad}");
+        }
+        assert!(checked_path("/tmp/a.jpg", READ_EXT).is_ok());
+        assert!(checked_path("/tmp/a.jpg", WRITE_EXT).is_err());
+    }
 }

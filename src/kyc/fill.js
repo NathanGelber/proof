@@ -33,6 +33,9 @@ export function initFill(ctx) {
   });
 }
 
+/** The profile locked: the session holds profile objects, so it ends. Answers already on pages stay. */
+export function endFill() { if (ov) closeOfficeView(true); SES = null; }
+
 /** Is a fill session running on one of these documents? Then the Form tab shows its list. */
 export function fillPanelFor(docs, body) {
   if (!SES || SES.kind === 'office' || !docs.includes(SES.doc) || !C.S.docs.includes(SES.doc)) return false;

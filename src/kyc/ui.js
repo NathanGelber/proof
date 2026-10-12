@@ -4,18 +4,20 @@
 import * as host from '../host.js';
 import { GROUPS, ENTITY_KEYS, PERSON_KEYS, ROLES, SPECIAL_KEYS, DOC_TYPES, docTypeInfo, entityKeys, personKeys, keyDef, keyLabel, roleInfo, newEntity, ENUM_KINDS } from './schema.js';
 import { COUNTRIES } from './countries.js';
-import { K, V, refreshInfo, unlockWith, createWith, lockNow, persist, flush, setValue, computed, rawValue, peopleIn, todayIso, entityById, errKind, errMsg, setSaveErrorHandler, onChange } from './vault.js';
+import { K, V, refreshInfo, unlockWith, createWith, lockNow, pruneLog, persist, flush, setValue, computed, rawValue, peopleIn, todayIso, entityById, errKind, errMsg, setSaveErrorHandler, onChange } from './vault.js';
 import { pageLines, describeFields, flatLines, fingerprint, sha256 } from './extract.js';
 import { loadOffice, isOfficeName } from './office.js';
 import { localFields, claudeMatch, libLabel, libKey, isQuestionLine, lineLabel } from './match.js';
-import { initFill, fillPanelFor } from './fill.js';
+import { initFill, fillPanelFor, endFill } from './fill.js';
 import { prepare, pdfjsLib } from '../engine.js';
 
 let C; // context from main.js
 const IDLE_MS = 15 * 60 * 1000;
 let lastUse = Date.now();
 const touch = () => (lastUse = Date.now());
-setInterval(() => { if (K.P && Date.now() - lastUse > IDLE_MS) { lockNow().then(() => { closePanel(); C?.renderInsp(); C?.toast('Profile locked after 15 minutes without use.'); }); } }, 30000);
+setInterval(() => { if (K.P && Date.now() - lastUse > IDLE_MS) lockNow().then(() => afterLock('Profile locked after 15 minutes without use.')); }, 30000);
+/** After any lock: the decrypted profile leaves the page, open screens close, a running fill ends. */
+function afterLock(msg) { K.P = null; closePanel(); endFill(); C?.renderInsp(); if (msg) C?.toast(msg, 6000); }
 
 const fmtDate = iso => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || ''); return m ? `${m[3]}-${m[2]}-${m[1]}` : iso || ''; };
 const daysSince = iso => Math.floor((Date.now() - new Date(iso + 'T00:00:00').getTime()) / 86400000);
@@ -37,6 +39,7 @@ export function initKyc(ctx) {
   onChange(() => { if (C.S.itab === 'form') C.renderInsp(); });
   refreshInfo().catch(() => {});
   initFill(C);
+  host.onEvent('vault-locked', () => { if (K.P) afterLock('Profile locked after 15 minutes without use.'); });
   if (!host.isDesktop) import('./schema.js').then(schema => (window.__kyc = { K, V, setValue, flush, schema }));
 }
 
@@ -92,7 +95,7 @@ function setupDialog(info) {
     const m = modal('Set up your profile',
       h('p', {}, 'One encrypted file holds your entities, people, documents and the record of what you sent. Only this passphrase opens it.'),
       h('label', { class: 'fld', for: 'kyc-ent' }, h('span', { class: 'lbl' }, 'First entity'), name),
-      h('label', { class: 'fld', for: 'kyc-p1' }, h('span', { class: 'lbl' }, 'Passphrase (10+ characters)'), p1),
+      h('label', { class: 'fld', for: 'kyc-p1' }, h('span', { class: 'lbl' }, 'Passphrase (12+ characters)'), p1),
       h('label', { class: 'fld', for: 'kyc-p2' }, h('span', { class: 'lbl' }, 'Same again'), p2),
       h('p', { class: 'hint' }, 'There is no way to recover a forgotten passphrase. Store it in your password manager.'),
       h('div', { class: 'fld' }, h('span', { class: 'lbl' }, 'Saved at'), where,
@@ -109,7 +112,7 @@ function setupDialog(info) {
     async function ok() {
       msg.textContent = '';
       if (!name.value.trim()) { msg.textContent = 'Name the first entity.'; return; }
-      if (p1.value.length < 10) { msg.textContent = 'Use at least 10 characters.'; return; }
+      if (p1.value.length < 12) { msg.textContent = 'Use at least 12 characters. A few unrelated words works well.'; return; }
       if (p1.value !== p2.value) { msg.textContent = 'The passphrases don’t match.'; return; }
       go.disabled = true; go.textContent = 'Creating…';
       try { await createWith(p1.value, name.value.trim(), path); m.close(); touch(); resolve(true); }
@@ -155,7 +158,7 @@ function drawPanel() {
       h('h1', {}, 'Profile'), entSel,
       h('span', { class: 'sp' }),
       h('span', { class: 'kstate' }, K.dirty ? 'Saving…' : 'Saved · encrypted'),
-      h('button', { class: 'tbtn', onclick: async () => { await lockNow(); closePanel(); C.toast('Profile locked.'); } }, 'Lock'),
+      h('button', { class: 'tbtn', onclick: async () => { await lockNow(); afterLock('Profile locked.'); } }, 'Lock'),
       h('button', { class: 'tbtn', onclick: closePanel, title: 'Close (Esc)' }, 'Close')),
     h('nav', { class: 'kn' }, nav.map(([k, l]) => h('button', { 'aria-pressed': String(view.sec === k), onclick: () => { view.sec = k; view.person = null; drawPanel(); } }, h('span', {}, l), count[k] ? h('b', {}, count[k]) : null))),
     h('div', { class: 'kc' }, ent || ['settings', 'forms', 'library'].includes(view.sec) ? section(ent) : h('p', { class: 'hint' }, 'Add an entity to begin.')));
@@ -510,6 +513,11 @@ function settingsView() {
       h('p', { class: 'hint' }, 'The key lives in Windows Credential Manager, not in the profile, and never reaches this screen.'),
       h('label', { class: 'fld', for: 'st-model' }, h('span', { class: 'lbl' }, 'Model'), model)),
     h('div', { class: 'kblock2' }, h('h3', {}, 'Answers'), h('label', { class: 'fld', for: 'st-df' }, h('span', { class: 'lbl' }, 'Default date format'), df), h('p', { class: 'hint' }, 'Used when a form doesn’t say which format it wants.')),
+    h('div', { class: 'kblock2' }, h('h3', {}, 'Fill record'),
+      (() => { const sel = h('select', { id: 'st-ret' }, [[0, 'Keep everything'], [10, '10 years'], [7, '7 years'], [5, '5 years'], [2, '2 years'], [1, '1 year']].map(([v, l]) => h('option', { value: v }, l))); sel.value = String(K.P.settings.logYears || 0);
+        sel.onchange = () => { K.P.settings.logYears = +sel.value; const n = pruneLog(); persist(); if (n) C.toast(`Removed ${n} older record${n > 1 ? 's' : ''}.`); drawPanel(); };
+        return h('label', { class: 'fld', for: 'st-ret' }, h('span', { class: 'lbl' }, 'Keep records for'), sel); })(),
+      h('p', { class: 'hint' }, 'The record holds what you sent, including UBO and director details. Older entries are deleted when the profile is unlocked.')),
     h('div', { class: 'kblock2' }, h('h3', {}, 'Profile file'),
       h('p', { class: 'hint' }, info.path || ''),
       h('div', { class: 'btns' },

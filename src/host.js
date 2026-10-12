@@ -88,6 +88,7 @@ export function systemFont() {
 }
 
 export async function launchFiles() { return isDesktop ? core.invoke('launch_files') : []; }
+export function onEvent(name, cb) { if (isDesktop) eventApi.listen(name, e => cb(e.payload)); }
 export function onOpenFiles(cb) { if (isDesktop) eventApi.listen('open-files', e => cb(e.payload)); }
 
 /** Files dropped onto the window. cb(entries) with {name, path, type, bytes}; hover(true/false) for the overlay. */

@@ -62,7 +62,28 @@ export const onChange = fn => K.listeners.add(fn);
 const emit = () => K.listeners.forEach(f => { try { f(); } catch (e) { console.error(e); } });
 
 export async function refreshInfo() { K.info = await V.info(); if (!K.info.unlocked && K.P) { K.P = null; emit(); } return K.info; }
-export async function unlockWith(pass) { K.P = upgrade(await V.unlock(pass)); K.info = await V.info(); emit(); return K.P; }
+export async function unlockWith(pass) { K.P = upgrade(await V.unlock(pass)); K.info = await V.info(); migrateSignature(); pruneLog(); emit(); return K.P; }
+
+// ---- the saved signature: kept in the encrypted profile, never in browser storage
+const OLD_SIG = 'proof.signature';
+/** Older versions kept the signature unencrypted in the window's storage. Move it in, then wipe it. */
+function migrateSignature() {
+  let old = null; try { old = localStorage.getItem(OLD_SIG); } catch {}
+  if (old && !K.P.signature) { K.P.signature = old; persist(); }
+  try { localStorage.removeItem(OLD_SIG); } catch {}
+}
+export const sigAvailable = () => !!K.P;
+export const sigGet = () => K.P?.signature || null;
+export function sigSet(url) { if (!K.P) return false; if (url) K.P.signature = url; else delete K.P.signature; persist(); return true; }
+
+/** Drop fill-record entries older than the retention setting (0 = keep everything). */
+export function pruneLog() {
+  const y = +(K.P?.settings?.logYears || 0); if (!y || !K.P.log?.length) return 0;
+  const cut = new Date(); cut.setFullYear(cut.getFullYear() - y); const iso = cut.toISOString();
+  const before = K.P.log.length; K.P.log = K.P.log.filter(l => (l.at || '') >= iso);
+  if (K.P.log.length !== before) persist();
+  return before - K.P.log.length;
+}
 export async function createWith(pass, entityName, path) {
   const { newEntity } = await import('./schema.js');
   const P = newProfile(); if (entityName) P.entities.push(newEntity(entityName));

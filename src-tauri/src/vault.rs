@@ -78,6 +78,26 @@ fn open(key: &[u8; 32], aad: &[u8], sealed: &[u8]) -> Result<Zeroizing<Vec<u8>>,
         .map_err(|_| ())
 }
 
+/// Rules for a new passphrase. Existing profiles with older, shorter passphrases still open.
+pub fn check_new_pass(p: &str) -> Result<(), String> {
+    let n = p.chars().count();
+    if n < 12 {
+        return Err("Use a passphrase of at least 12 characters. A few unrelated words works well.".into());
+    }
+    let distinct: std::collections::HashSet<char> = p.to_lowercase().chars().collect();
+    if distinct.len() < 6 || p.chars().all(|c| c.is_ascii_digit()) {
+        return Err("That passphrase is too easy to guess. Use a few unrelated words.".into());
+    }
+    let low = p.to_lowercase();
+    for common in ["password", "wachtwoord", "passphrase", "qwerty", "123456", "letmein", "welcome", "proof"] {
+        let squashed = low.replace([' ', '-', '_', '.'], "");
+        if squashed.starts_with(common) && squashed.chars().count() - common.chars().count() < 8 {
+            return Err("That passphrase is too easy to guess. Use a few unrelated words.".into());
+        }
+    }
+    Ok(())
+}
+
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("Couldn't create {}: {e}", dir.display()))?;
@@ -133,9 +153,7 @@ impl Vault {
     }
 
     pub fn create(&mut self, pass: &str, initial: &str) -> Result<(), String> {
-        if pass.chars().count() < 10 {
-            return Err("Use a passphrase of at least 10 characters.".into());
-        }
+        check_new_pass(pass)?;
         if self.exists() {
             return Err(format!("A profile already exists at {}.", self.path.display()));
         }
@@ -220,9 +238,7 @@ impl Vault {
 
     pub fn change_pass(&mut self, old: &str, new: &str) -> Result<(), String> {
         self.touch()?;
-        if new.chars().count() < 10 {
-            return Err("Use a passphrase of at least 10 characters.".into());
-        }
+        check_new_pass(new)?;
         let u = |i: usize| u32::from_le_bytes(self.head[i..i + 4].try_into().unwrap());
         let (m, t, p) = (u(8), u(12), u(16));
         let k_old = kek(old, &self.head[20..36], m, t, p)?;
@@ -326,6 +342,15 @@ mod tests {
         assert!(w.get_doc("../etc/passwd").is_err());
         let raw = std::fs::read(&p).unwrap();
         assert!(!raw.windows(5).any(|x| x == b"\"a\":2"));
+    }
+
+    #[test]
+    fn passphrase_rules() {
+        assert!(check_new_pass("short").is_err());
+        assert!(check_new_pass("111111111111").is_err());
+        assert!(check_new_pass("aaaaaaaaaaaaaa").is_err());
+        assert!(check_new_pass("Password1234").is_err());
+        assert!(check_new_pass("correct horse battery").is_ok());
     }
 
     #[test]

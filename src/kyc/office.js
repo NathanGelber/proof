@@ -28,8 +28,16 @@ const labelLike = t => t && t.length <= 160 && t.split(' ').length <= 22 && /[A-
 export const isOfficeName = n => /\.(docx|xlsx|docm|xlsm)$/i.test(n || '');
 export const officeKind = n => (/\.(xlsx|xlsm)$/i.test(n) ? 'xlsx' : 'docx');
 
+const MAX_FILE = 50 * 1024 * 1024, MAX_PART = 100 * 1024 * 1024, MAX_TOTAL = 300 * 1024 * 1024, MAX_ENTRIES = 10000;
+
 export async function loadOffice(bytes, name) {
+  if (bytes.length > MAX_FILE) throw new Error(`${name} is larger than 50 MB, which is more than any form should be.`);
   let zip; try { zip = await JSZip.loadAsync(bytes); } catch { throw new Error('This file isn’t a readable Word or Excel file. Old .doc and .xls files need saving as .docx or .xlsx in Word or Excel first.'); }
+  // A small file that unpacks to gigabytes (a "zip bomb") would hang Proof: check sizes before reading anything.
+  const files = Object.values(zip.files);
+  let total = 0;
+  if (files.length > MAX_ENTRIES) throw new Error(`${name} has too many parts to be a normal Word or Excel file.`);
+  for (const f of files) { const n = f._data?.uncompressedSize || 0; total += n; if (n > MAX_PART || total > MAX_TOTAL) throw new Error(`${name} unpacks to far more than its size. Proof won’t open it.`); }
   if (zip.file('word/document.xml')) return docx(zip, name);
   if (zip.file('xl/workbook.xml')) return xlsx(zip, name);
   throw new Error('This file isn’t a Word or Excel document.');
