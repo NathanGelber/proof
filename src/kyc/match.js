@@ -129,6 +129,49 @@ function dateAs(text) {
 }
 function countryAs(f, text) { if (f.maxLen === 2 || /\b(iso|code)\b/i.test(text)) return 'country:iso2'; if (f.maxLen === 3) return 'country:iso3'; return 'country:name'; }
 
+// ---------------------------------------------------------------- label library
+// Labels you've confirmed, mapped to profile items. Person items are kept without role or
+// number ("person:date_of_birth"); which person a field means still comes from its context.
+export const libKey = label => norm(label).replace(/\b\d+\b/g, ' ').replace(/\s+/g, ' ').trim();
+export function libLookup(...labels) {
+  const L = K.P?.library; if (!L) return null;
+  for (const l of labels) { const k = libKey(l); if (k && L[k]) return { ...L[k], label: k }; }
+  return null;
+}
+/** Remember a confirmed label → item. The latest confirmation wins. */
+export function learn(label, key, as, kind) {
+  if (!K.P || !key || (as || '').startsWith('literal:')) return;
+  const k = libKey(label); if (!k || k.length > 160 || k.split(' ').length > 25) return;
+  const m = /^[a-z_]+\.\d+\.([a-z0-9_]+)$/.exec(key);
+  const item = m ? 'person:' + m[1] : key;
+  const L = (K.P.library ||= {}); const old = L[k];
+  const keepAs = kind === 'check' ? as : undefined;
+  L[k] = { key: item, ...(keepAs ? { as: keepAs } : {}), n: old && old.key === item ? (old.n || 0) + 1 : 1, at: new Date().toISOString().slice(0, 10) };
+}
+/** The label a field is remembered by. Tick boxes include their question, or every "Yes" box would look alike. */
+export function libLabel(f) {
+  if (f.kind === 'check') {
+    // "Passive NFFE" says it all; "Yes" only means something with its question.
+    if (f.right && !/^(yes|no|ja|nee|y|n|j|true|false|oui|non|si|nein)\b/i.test(f.right.trim())) return f.right;
+    return [f.left || f.tip || f.above || '', f.right || ''].filter(Boolean).join(' → ');
+  }
+  return f.tip || f.left || f.above || f.inside || (GENERIC_NAME.test(f.nice || '') ? '' : f.nice) || '';
+}
+function libPick(entry, E, Pk) {
+  if (!entry) return null;
+  if (entry.key.startsWith('person:')) { const c = Pk.find(d => d.key === entry.key.slice(7)); return c ? { c, exact: true, lib: entry } : null; }
+  const c = E.find(d => d.key === entry.key); return c ? { c, exact: true, lib: entry } : null;
+}
+
+/** Lines above a field that can head a block about a person ("Beneficial owner 2", "Director 1"), not other labels ("Signed by:"). */
+const blockLines = ctx => (ctx || []).filter(t => !/[:?_]\s*$|_{3,}/.test(t) && norm(t).split(' ').length <= 6);
+
+/** A remembered label only applies where it fits: person items inside a block about a person, company items outside one. */
+function fitsScope(pick, ctx) {
+  if (!pick || pick.c.key === 'today') return pick;
+  return (pick.c.scope === 'person') === !!ctx ? pick : null;
+}
+
 /** Local proposals for fillable fields. */
 export function localFields(ent, fields) {
   const E = prep([...entityKeys(ent), ...SPECIAL_KEYS], 'entity');
@@ -144,12 +187,12 @@ export function localFields(ent, fields) {
     if (f.kind === 'text' && SKIP_RE.test(label + ' ' + norm(f.nice))) continue;
     const nice = GENERIC_NAME.test(f.nice || '') ? '' : f.nice;
     const own = [f.kind === 'check' ? f.right : '', f.left, f.tip, f.above, nice].filter(Boolean);
-    const ctx = own.some(t => ABOUT_ALL.test(norm(t))) ? null : roleIn(...own) || roleIn(...(f.ctx || [])) || roleIn(f.section);
+    const ctx = own.some(t => ABOUT_ALL.test(norm(t))) ? null : roleIn(...own) || roleIn(...blockLines(f.ctx)) || roleIn(f.section);
     const texts = [[norm(f.tip), 1], [norm(f.left), 0.95], [norm(f.above), 0.9], [norm(f.inside), 0.85], [norm(nice), 0.7]];
     if (f.kind === 'check') texts.unshift([norm(f.right), 1]);
-    let pick = null, as = '', conf = 'low', note = '';
+    let pick = fitsScope(libPick(f.kind === 'check' ? libLookup(libLabel(f)) : libLookup(f.tip, f.left, f.above, f.inside, nice), E, Pk), ctx), as = pick?.lib.as || '', conf = 'low', note = '';
     // Checkboxes whose label is one of a choice list (FATCA classes, ID types…).
-    if (f.kind === 'check') {
+    if (f.kind === 'check' && !pick) {
       const lab = norm(f.right) || norm(f.left) || norm(f.tip) || norm(f.nice);
       for (const d of choiceKeys) for (const ch of d.choices) if (lab && (lab === norm(ch) || (norm(ch).length > 6 && lab.includes(norm(ch))))) { pick = { c: { ...d, scope: PERSON_KEYS.includes(d) ? 'person' : 'entity' }, exact: true }; as = 'check:' + ch; }
     }
@@ -189,7 +232,7 @@ export function localFields(ent, fields) {
       else as = 'text';
     }
     conf = pick.exact ? (d.scope === 'person' && !ctx ? 'medium' : 'high') : pick.extra <= 3 ? 'medium' : 'low';
-    out.push({ id: f.id, key, as, confidence: conf, note, source: 'local' });
+    out.push({ id: f.id, key, as, confidence: pick.lib ? 'high' : conf, note, source: pick.lib ? 'library' : 'local' });
   }
   return out;
 }
@@ -210,8 +253,8 @@ export function localLines(ent, lines) {
     const label = norm(m ? m[1] : l.text);
     if (!label || SKIP_RE.test(label)) continue;
     const cands = ctx ? [...Pk, ...E.map(e => ({ ...e, bonus: -4 }))] : E;
-    const b = bestKey([[label, 1]], cands);
-    if (!b || b.score < 14) continue;
+    const b = fitsScope(libPick(libLookup(m ? m[1] : l.text), E, Pk), ctx?.office ? null : ctx) || bestKey([[label, 1]], cands);
+    if (!b || (!b.lib && b.score < 14)) continue;
     let key = b.c.key;
     if (b.c.scope === 'person') {
       const role = ctx?.role || 'director';
@@ -225,7 +268,7 @@ export function localLines(ent, lines) {
     }
     const as = b.c.kind === 'date' ? dateAs(l.text) : b.c.kind === 'country' ? 'country:name' : 'text';
     const place = /:\s*$/.test(l.text.trim()) && !/_{3,}/.test(l.text) && l.text.length < 40 ? 'right' : /_{3,}|\.{4,}|:/.test(l.text) ? 'right' : 'below';
-    out.push({ id: l.id, key, as, place, label: m ? m[1] : l.text, confidence: b.exact ? 'high' : 'low', note: '', source: 'local' });
+    out.push({ id: l.id, key, as, place, label: m ? m[1] : l.text, confidence: b.exact ? 'high' : 'low', note: '', source: b.lib ? 'library' : 'local' });
   }
   return out;
 }
@@ -257,21 +300,34 @@ function clean(list, ids, ent) {
   return out;
 }
 
-export function claudeRequest(ent, { fields, lines, title }) {
+/** Lines of a flat form that ask something: short, and ending in a colon, blank, tick box or question mark. */
+export const isQuestionLine = l => l.heading || (l.text.length <= 140 && (/[:?]\s*$/.test(l.text) || /_{3,}|\.{4,}|…{2,}|\[\s*\]|[☐□]/.test(l.text) || /:\s+\S/.test(l.text) && l.text.length <= 80));
+
+/**
+ * What Claude gets. Only the text that labels each answer spot: no file name, no letterhead,
+ * no instructions, no surrounding lines. The backend then masks emails, URLs, phone and account
+ * numbers, dates and long numbers, and cuts the counterparty's name and the profile's values.
+ */
+export function claudeRequest(ent, { fields, lines, avoid }) {
   const model = K.P?.settings?.model || 'claude-sonnet-5-5';
-  if (fields) return { model, mode: 'fields', title: title || '', keys: keyCatalog(ent), fields: fields.filter(f => !f.ro).map(f => ({ id: f.id, kind: f.kind, page: f.page, name: f.where ? [f.where, f.nice].filter(Boolean).join(' · ') : f.nice, tip: f.tip, near: f.near, section: f.section, options: f.options })) };
-  return { model, mode: 'lines', title: title || '', keys: keyCatalog(ent), lines: lines.map(l => ({ id: l.id, page: l.page, text: (l.heading ? '## ' : '') + l.text })) };
+  const base = { model, title: '', keys: keyCatalog(ent), avoid: (avoid || []).filter(Boolean) };
+  if (fields) return { ...base, mode: 'fields', fields: fields.filter(f => !f.ro).map(f => {
+    const role = roleIn(...blockLines(f.ctx).slice(0, 4)) || roleIn(f.section);
+    const near = [f.left && `left: ${f.left}`, f.above && `above: ${f.above}`, f.right && `right: ${f.right}`, f.inside && `inside: ${f.inside}`, f.below && `below: ${f.below}`, role && `in a block about ${role.role}${role.n ? ' ' + role.n : ''}`].filter(Boolean).join(' · ');
+    return { id: f.id, kind: f.kind, page: f.page, name: GENERIC_NAME.test(f.nice || '') ? '' : f.nice || '', tip: f.tip, near, section: f.section, options: f.options };
+  }) };
+  return { ...base, mode: 'lines', lines: lines.filter(isQuestionLine).map(l => ({ id: l.id, page: l.page, text: (l.heading ? '## ' : '') + l.text })) };
 }
 
 /** Run Claude over the form in chunks. Returns {matches, removed}. */
-export async function claudeMatch(ent, { fields, lines, title }, onProgress) {
-  const items = fields ? fields.filter(f => !f.ro) : lines;
+export async function claudeMatch(ent, { fields, lines, avoid }, onProgress) {
+  const items = fields ? fields.filter(f => !f.ro) : lines.filter(isQuestionLine);
   const size = fields ? 140 : 260;
   const chunks = []; for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size));
   const ids = new Set(items.map(x => x.id));
   let removed = 0, done = 0; const all = [];
   const run = async c => {
-    const req = claudeRequest(ent, fields ? { fields: c, title } : { lines: c, title });
+    const req = claudeRequest(ent, fields ? { fields: c, avoid } : { lines: c, avoid });
     const r = await V.match(req);
     removed += r.removed || 0; all.push(...clean(r.matches, ids, ent)); onProgress?.(++done, chunks.length);
   };

@@ -48,6 +48,7 @@ function atomsOf(p) {
     if (ancestor(r, W, 'del', p) || ancestor(r, W, 'moveFrom', p)) continue;
     const rPr = kid(r, W, 'rPr'); const u = kid(rPr, W, 'u'); const under = !!u && attr(u, 'val') !== 'none';
     const sdt = ancestor(r, W, 'sdt', p);
+    if (sdt && kid(kid(sdt, W, 'sdtPr'), W, 'showingPlcHdr')) continue; // "Click or tap here to enter text."
     for (const c of r.childNodes) {
       if (c.nodeType !== 1 || c.namespaceURI !== W) continue;
       const base = { node: c, run: r, under, sdt };

@@ -7,7 +7,8 @@ import { COUNTRIES } from './countries.js';
 import { K, V, refreshInfo, unlockWith, createWith, lockNow, persist, flush, setValue, computed, rawValue, peopleIn, todayIso, entityById, errKind, errMsg, setSaveErrorHandler, onChange } from './vault.js';
 import { pageLines, describeFields, flatLines, fingerprint, sha256 } from './extract.js';
 import { loadOffice, isOfficeName } from './office.js';
-import { localFields, localLines, claudeMatch, claudeRequest, render, placeOnLine, yesNoOption } from './match.js';
+import { localFields, localLines, claudeMatch, claudeRequest, render, placeOnLine, yesNoOption, learn, libLabel, libKey, isQuestionLine } from './match.js';
+import { prepare, pdfjsLib } from '../engine.js';
 
 let C; // context from main.js
 const IDLE_MS = 15 * 60 * 1000;
@@ -142,10 +143,10 @@ function drawPanel() {
   const entSel = h('select', { 'aria-label': 'Entity', class: 'entsel' }, K.P.entities.map(e => h('option', { value: e.id }, e.name)), h('option', { value: '+' }, 'Add an entity…'));
   if (ent) entSel.value = ent.id;
   entSel.onchange = () => { if (entSel.value === '+') return addEntity(); setCurEntity(entSel.value); view.person = null; drawPanel(); };
-  const nav = [...GROUPS, ['people', 'People'], ['docs', 'Documents'], ['custom', 'Custom items'], ['log', 'Fill record'], ['forms', 'Saved forms'], ['settings', 'Settings']];
+  const nav = [...GROUPS, ['people', 'People'], ['docs', 'Documents'], ['custom', 'Custom items'], ['log', 'Fill record'], ['forms', 'Saved forms'], ['library', 'Label library'], ['settings', 'Settings']];
   const count = {
     people: ent ? ent.people.filter(p => !p.until || p.until > todayIso()).length : 0,
-    docs: ent?.docs.length || 0, log: K.P.log.filter(l => l.entity === ent?.id).length, forms: Object.keys(K.P.mappings).length,
+    docs: ent?.docs.length || 0, log: K.P.log.filter(l => l.entity === ent?.id).length, forms: Object.keys(K.P.mappings).length, library: Object.keys(K.P.library || {}).length,
   };
   panel.replaceChildren(
     h('header', { class: 'kh' },
@@ -155,7 +156,7 @@ function drawPanel() {
       h('button', { class: 'tbtn', onclick: async () => { await lockNow(); closePanel(); C.toast('Profile locked.'); } }, 'Lock'),
       h('button', { class: 'tbtn', onclick: closePanel, title: 'Close (Esc)' }, 'Close')),
     h('nav', { class: 'kn' }, nav.map(([k, l]) => h('button', { 'aria-pressed': String(view.sec === k), onclick: () => { view.sec = k; view.person = null; drawPanel(); } }, h('span', {}, l), count[k] ? h('b', {}, count[k]) : null))),
-    h('div', { class: 'kc' }, ent || ['settings', 'forms'].includes(view.sec) ? section(ent) : h('p', { class: 'hint' }, 'Add an entity to begin.')));
+    h('div', { class: 'kc' }, ent || ['settings', 'forms', 'library'].includes(view.sec) ? section(ent) : h('p', { class: 'hint' }, 'Add an entity to begin.')));
   panel.querySelector('.kc').scrollTop = top;
 }
 onChange(() => { const s = panel?.querySelector('.kstate'); if (s) s.textContent = K.dirty ? 'Saving…' : 'Saved · encrypted'; });
@@ -173,7 +174,7 @@ function addEntity() {
 function section(ent) {
   const s = view.sec;
   if (GROUPS.some(g => g[0] === s)) return groupEditor(ent, s);
-  return ({ people: peopleView, docs: docsView, custom: customView, log: logView, forms: formsView, settings: settingsView })[s](ent);
+  return ({ people: peopleView, docs: docsView, custom: customView, log: logView, forms: formsView, library: libraryView, settings: settingsView })[s](ent);
 }
 
 // ---- value editors
@@ -389,6 +390,103 @@ function formsView() {
       h('button', { class: 'x', 'aria-label': 'Forget ' + m.title, onclick: () => { delete K.P.mappings[fp]; persist(); drawPanel(); } }, '×')))) : h('p', { class: 'hint' }, 'None yet.'));
 }
 
+// ---- label library
+const libItemLabel = (ent, key) => key.startsWith('person:') ? `Person · ${personKeys(ent).find(d => d.key === key.slice(7))?.label || key.slice(7)}` : keyLabel(ent, key) || key;
+function libOptions(ent) {
+  return [...entityKeys(ent), ...SPECIAL_KEYS].map(d => [d.label, d.key]).concat(personKeys(ent).map(d => [`Person · ${d.label}`, 'person:' + d.key]));
+}
+function libraryView(ent) {
+  const { h } = C;
+  const q = h('input', { type: 'text', placeholder: 'Search labels', 'aria-label': 'Search' });
+  const list = h('div', { class: 'klib' });
+  const draw = () => {
+    const t = q.value.toLowerCase().trim();
+    const rows = Object.entries(K.P.library || {}).filter(([k, e]) => !t || k.includes(t) || libItemLabel(ent, e.key).toLowerCase().includes(t)).sort((a, b) => (b[1].n || 0) - (a[1].n || 0) || a[0].localeCompare(b[0]));
+    list.replaceChildren(...(rows.length ? [h('table', { class: 'ktab' }, h('tr', {}, h('th', {}, 'Label on forms'), h('th', {}, 'Profile item'), h('th', {}, 'Used'), h('th', {}, '')),
+      rows.slice(0, 500).map(([k, e]) => h('tr', {}, h('td', {}, k), h('td', {}, libItemLabel(ent, e.key) + (e.as ? ` (${e.as})` : '')), h('td', {}, e.seed && !e.n ? 'imported' : String(e.n || 0)),
+        h('td', {}, h('button', { class: 'x', 'aria-label': 'Forget ' + k, onclick: () => { delete K.P.library[k]; persist(); draw(); } }, '×')))))]
+      : [h('p', { class: 'hint' }, t ? 'Nothing matches.' : 'Empty. It fills itself as you apply answers, or import forms to start it off.')]));
+  };
+  q.addEventListener('input', draw); draw();
+  return h('section', { class: 'kblock' }, h('h2', {}, 'Label library'),
+    h('p', { class: 'hint' }, 'Form wording Proof has learned, and the profile item each label means. It’s checked before anything else, on this computer. Every answer you apply adds its label; a wrong one is fixed by deleting it here.'),
+    h('div', { class: 'btns' }, h('button', { class: 'btn', onclick: () => importForms(ent) }, 'Learn from forms…')), q, list);
+}
+
+async function pdfDoc(bytes) {
+  const prep = await prepare(bytes, async () => null);
+  const pdf = await pdfjsLib.getDocument({ data: prep.bytes.slice(), isEvalSupported: false }).promise;
+  const proxies = []; for (let i = 0; i < pdf.numPages; i++) proxies.push(await pdf.getPage(i + 1));
+  return { bytes: prep.bytes, proxies, pdf };
+}
+
+/** Read a batch of counterparty forms, propose an item for each new label, and add what you confirm. */
+async function importForms(ent) {
+  const files = (await host.pickOpen({ title: 'Choose counterparty forms to learn from' })).filter(f => isOfficeName(f.name) || /\.pdf$/i.test(f.name));
+  if (!files.length) return;
+  const b = C.busy('Reading forms…'); const seen = new Map(); const failed = [];
+  for (const [i, f] of files.entries()) {
+    b.set(`Reading ${i + 1} of ${files.length}: ${f.name}`);
+    try {
+      let descs;
+      if (isOfficeName(f.name)) descs = (await loadOffice(f.bytes, f.name)).slots;
+      else {
+        const doc = await pdfDoc(f.bytes);
+        const lines = await pageLines(doc); const fields = await describeFields(doc, lines);
+        descs = fields.length ? fields : flatLines(lines).filter(l => !l.heading && isQuestionLine(l)).map(l => ({ kind: 'text', tip: lineLabel(l.text), left: '', above: '', inside: '', right: '', below: '', nice: '', section: '', ctx: [], options: [], page: l.page, near: '' }));
+        doc.pdf.destroy?.();
+      }
+      for (const d of descs) {
+        if (d.ro) continue;
+        const lab = libLabel(d); const k = libKey(lab);
+        if (!k || k.length < 2 || (K.P.library || {})[k]) continue;
+        const e = seen.get(k); if (e) { e.forms.add(f.name); continue; }
+        seen.set(k, { k, lab, d: { ...d, id: 'f' + (seen.size + 1) }, forms: new Set([f.name]) });
+      }
+    } catch { failed.push(f.name); }
+  }
+  b.done();
+  if (!seen.size) { C.toast(failed.length ? `Couldn’t read ${failed.join(', ')}.` : 'Nothing new: every label in these forms is already known.', 7000); return; }
+  const items = [...seen.values()];
+  const props = new Map(localFields(ent, items.map(x => x.d)).map(p => [p.id, p]));
+  const info = await refreshInfo().catch(() => ({}));
+  let usedClaude = false;
+  const open = items.filter(x => !props.get(x.d.id)?.key);
+  if (open.length && info.has_key && K.P.settings.useClaude !== false) {
+    const bb = C.busy('Asking Claude about the rest (labels only)…');
+    try { const { matches } = await claudeMatch(ent, { fields: open.map(x => x.d) }, (i, n) => bb.set(`Asking Claude… ${i}/${n}`)); for (const m of matches) if (m.key) props.set(m.id, m); usedClaude = true; }
+    catch (e) { C.toast('Claude matching failed: ' + errMsg(e), 7000); }
+    finally { bb.done(); }
+  }
+  const asItem = key => { const m = /^[a-z_]+\.\d+\.([a-z0-9_]+)$/.exec(key || ''); return m ? 'person:' + m[1] : key || null; };
+  const rows = items.map(x => { const p = props.get(x.d.id); return { ...x, key: asItem(p?.key), as: x.d.kind === 'check' ? p?.as : undefined, conf: p?.confidence, include: !!p?.key && p.confidence !== 'low' }; })
+    .sort((a, b) => b.forms.size - a.forms.size || a.k.localeCompare(b.k));
+  const { h, modal } = C; const opts = libOptions(ent); const byLabel = new Map(opts);
+  const dl = h('datalist', { id: 'lib-keys' }, opts.map(([l]) => h('option', { value: l })));
+  const body = h('div', { class: 'rv-rows' });
+  const count = h('span', { class: 'rv-count' });
+  const save = h('button', { class: 'btn primary', onclick: done }, 'Add');
+  const draw = () => {
+    body.replaceChildren(...rows.map(r => {
+      const cb = h('input', { type: 'checkbox', checked: r.include, disabled: !r.key, 'aria-label': 'Add' }); cb.onchange = () => { r.include = cb.checked; tally(); };
+      const it = h('input', { type: 'text', list: 'lib-keys', placeholder: '— skip', value: r.key ? libItemLabel(ent, r.key) : '' });
+      it.onchange = () => { const v = it.value.trim(); r.key = v ? byLabel.get(v) || null : null; r.include = !!r.key; draw(); };
+      return h('div', { class: 'rv-row lib' + (r.include ? ' on' : '') }, cb, h('div', { class: 'rv-f' }, h('b', {}, r.lab), h('small', {}, `${r.forms.size} form${r.forms.size > 1 ? 's' : ''}${r.d.kind !== 'text' ? ' · ' + r.d.kind : ''}`)), h('div', { class: 'rv-k' }, it, r.as ? h('small', { class: 'rv-note' }, r.as) : null), r.conf ? h('span', { class: 'chip c-' + r.conf }, r.conf) : h('span', {}));
+    }));
+    tally();
+  };
+  const tally = () => { const n = rows.filter(r => r.include && r.key).length; count.textContent = `${rows.length} new labels · ${n} to add`; save.textContent = n ? `Add ${n}` : 'Add'; save.disabled = !n; };
+  const m = modal('Learn from forms', h('p', { class: 'hint' }, `${files.length - failed.length} form${files.length - failed.length > 1 ? 's' : ''} read${failed.length ? `, ${failed.length} couldn’t be read` : ''}. ${usedClaude ? 'Labels Proof didn’t know were matched by Claude (labels only, sanitized). ' : ''}Check the item for each label; untick or clear anything wrong.`), body, dl,
+    h('div', { class: 'rv-foot' }, count), h('div', { class: 'actions' }, h('button', { class: 'btn quiet', onclick: () => m.close() }, 'Cancel'), save));
+  m.modal.classList.add('wide');
+  draw();
+  function done() {
+    const L = (K.P.library ||= {}); let n = 0; const at = todayIso();
+    for (const r of rows) if (r.include && r.key) { L[r.k] = { key: r.key, ...(r.as ? { as: r.as } : {}), n: 0, at, seed: true }; n++; }
+    persist(); m.close(); drawPanel(); C.toast(`Added ${n} labels to the library.`);
+  }
+}
+
 function settingsView() {
   const { h } = C; const st = K.P.settings;
   const info = K.info || {};
@@ -401,7 +499,7 @@ function settingsView() {
   const pmsg = h('p', { class: 'msg', role: 'alert' });
   return h('section', { class: 'kblock' }, h('h2', {}, 'Settings'),
     h('div', { class: 'kblock2' }, h('h3', {}, 'Matching with Claude'),
-      h('p', { class: 'hint' }, 'Proof first matches fields itself, on this computer. Claude does the rest: it receives the form’s own text (field names, printed labels, options) and the names of your profile items, never their values. Before anything is sent, Proof checks every word against the values in this profile and cuts out any match. Only the Rust side of the app can reach the network; the screen you are looking at can’t.'),
+      h('p', { class: 'hint' }, 'Proof matches on this computer first: saved forms, then the label library, then its own phrase lists. Claude only sees what’s left, and only the label text of each answer spot (no file name, letterhead, instructions or surrounding lines) plus the names of your profile items, never their values. Before sending, Proof masks emails, web addresses, phone and account numbers, dates and long numbers, and cuts the counterparty’s name and anything matching your profile. Only the Rust side of the app can reach the network; the screen you are looking at can’t.'),
       h('label', { class: 'opt', for: 'st-use' }, use, h('div', {}, 'Offer Claude matching', h('small', {}, 'Off: matching stays local and you map the rest by hand.'))),
       h('label', { class: 'fld', for: 'st-key' }, h('span', { class: 'lbl' }, 'Anthropic API key'), key),
       h('div', { class: 'btns' },
@@ -580,7 +678,7 @@ function review(R) {
     try {
       // Only what's still open: fields without a saved or hand-made answer.
       const open = flat ? R.lines : R.fields.filter(f => !f.ro && !rows.some(r => r.target === f && (r.source === 'saved' || r.touched)));
-      const { matches, removed } = await claudeMatch(ent, flat ? { lines: open, title: R.doc.name } : { fields: open, title: R.doc.name }, (i, n) => (cBtn.textContent = n > 1 ? `Asking Claude… ${i}/${n}` : 'Asking Claude…'));
+      const { matches, removed } = await claudeMatch(ent, flat ? { lines: open, avoid: [cp.value] } : { fields: open, avoid: [cp.value] }, (i, n) => (cBtn.textContent = n > 1 ? `Asking Claude… ${i}/${n}` : 'Asking Claude…'));
       let changed = 0;
       for (const p of matches) {
         if (flat) {
@@ -608,7 +706,7 @@ function review(R) {
   async function showSent() {
     const open = flat ? R.lines : R.fields.filter(f => !f.ro).slice(0, 140);
     try {
-      const [text, removed] = await V.preview(claudeRequest(ent, flat ? { lines: open.slice(0, 260), title: R.doc.name } : { fields: open, title: R.doc.name }));
+      const [text, removed] = await V.preview(claudeRequest(ent, flat ? { lines: open.filter(isQuestionLine).slice(0, 260), avoid: [cp.value] } : { fields: open, avoid: [cp.value] }));
       const pre = h('pre', { class: 'rv-pre' }); pre.textContent = text;
       const mm = modal('What gets sent', h('p', { class: 'hint' }, `This is the exact request text${(flat ? R.lines.length > 260 : R.fields.length > 140) ? ' (first part; large forms go in several requests)' : ''}. ${removed ? `${removed} bit${removed > 1 ? 's' : ''} matching your profile ${removed > 1 ? 'were' : 'was'} replaced with […].` : 'Nothing in it matched a value in your profile.'}`), pre,
         h('div', { class: 'actions' }, h('button', { class: 'btn primary', onclick: () => mm.close() }, 'Close')));
@@ -643,6 +741,7 @@ function review(R) {
       for (const r of rows) if (r.include && r.key) entries[r.target.name] = { key: r.key, as: r.as };
       for (const r of rows) if (r.touched && !r.key) entries[r.target.name] = { skip: true };
       K.P.mappings[R.fp] = { title: R.doc.name, kind: R.office.kind, updated: todayIso(), entries };
+      learnRows();
       K.P.log.unshift({ at: new Date().toISOString(), entity: ent.id, counterparty: cp.value.trim(), file: R.doc.name, fp: R.fp, fields });
       if (K.P.log.length > 5000) K.P.log.length = 5000;
       persist(); touch(); m.close();
@@ -681,16 +780,26 @@ function review(R) {
       for (const r of rows) if (r.touched && !r.key) entries[r.target.name] = { skip: true };
     }
     K.P.mappings[R.fp] = { title: R.doc.name, kind: flat ? 'flat' : 'acro', updated: todayIso(), entries };
+    learnRows();
     K.P.log.unshift({ at: new Date().toISOString(), entity: ent.id, counterparty: cp.value.trim(), file: R.doc.name, fp: R.fp, fields });
     if (K.P.log.length > 5000) K.P.log.length = 5000;
     persist(); touch();
     m.close(); C.renderInsp(); C.updateChrome(); C.redrawPages?.();
     C.toast(`Filled ${n} ${flat ? 'answers' : 'fields'}.${errs.length ? ` ${errs.length} couldn’t be filled.` : ''} Check them on the pages, then save.`, 6000);
   }
+  /** Every answer you applied teaches the library its label. */
+  function learnRows() {
+    for (const r of rows) {
+      if (!r.include || !r.key) continue;
+      if (flat) { if (r.place !== 'mark' && r.target.text) learn(r.label || lineLabel(r.target.text), r.key, r.as, 'text'); }
+      else learn(libLabel(r.target), r.key, r.as, r.target.kind);
+    }
+  }
   function logField(label, key, value) { const d = keyDef(ent, key); return { label: String(label || '').slice(0, 160), key, value: String(value), ...(d && ENUM_KINDS.has(d.kind) ? { e: true } : {}) }; }
   draw();
 }
 
+const lineLabel = t => (/^(.*?)(?::|_{3,}|\.{4,}|\s{2,}|$)/.exec(t) || [, t])[1].trim();
 const fieldLabel = f => (f.kind === 'check' ? (f.where && f.left && f.right ? `${f.left} → ${f.right}` : f.right || f.tip || f.left || f.inside || f.above) : f.tip || f.left || f.above || f.inside || f.right) || f.nice || f.name;
 
 function wrap(text, pos, doc, pageIdx) {

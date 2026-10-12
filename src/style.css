@@ -285,3 +285,6 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); outline: n
 .rv-foot .fld { width: min(360px, 100%); }
 .rv-count { font-family: var(--mono); font-size: 11px; color: var(--mute); margin-left: auto; }
 .rv-pre { background: var(--well); padding: 12px; font-family: var(--mono); font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 60vh; overflow: auto; margin: 0; user-select: text; }
+
+.rv-row.lib { grid-template-columns: 22px minmax(240px, 1.4fr) minmax(240px, 1fr) 64px; }
+.klib .ktab td:nth-child(3) { font-family: var(--mono); font-size: 11px; color: var(--mute); }

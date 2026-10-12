@@ -19,6 +19,9 @@ const COMMON: &[&str] = &[
     "member", "members", "fund", "funds", "bank", "financial", "finance", "markets",
 ];
 
+/// Words in a counterparty's name that also appear in ordinary form labels.
+const TERM_COMMON: &[&str] = &["clearing", "client", "clients", "onboarding", "form", "kyc", "know", "your", "customer", "services", "securities", "asset", "assets", "private", "global", "investment", "investor", "account", "accounts", "prime", "brokerage", "custody", "depositary", "trust"];
+
 pub struct Scrubber {
     needles: Vec<Vec<char>>,
 }
@@ -109,6 +112,24 @@ impl Scrubber {
         // Longest first, so a full value is removed before its parts.
         needles.sort_by(|a, b| b.len().cmp(&a.len()));
         Scrubber { needles }
+    }
+
+    /// Also cut these terms (e.g. the counterparty's name), and their distinctive words.
+    pub fn add_terms(&mut self, terms: &[String]) {
+        for t in terms {
+            let c = compact(t);
+            if c.len() >= MIN_LEN && !self.needles.contains(&c) {
+                self.needles.push(c);
+            }
+            for w in t.split_whitespace() {
+                let c = compact(w);
+                let lw: String = c.iter().collect();
+                if c.len() >= MIN_LEN && !COMMON.contains(&lw.as_str()) && !TERM_COMMON.contains(&lw.as_str()) && !self.needles.contains(&c) {
+                    self.needles.push(c);
+                }
+            }
+        }
+        self.needles.sort_by(|a, b| b.len().cmp(&a.len()));
     }
 
     /// Returns the text with profile values replaced by "[…]", and how many were removed.

@@ -60,6 +60,9 @@ pub struct MatchRequest {
     pub lines: Vec<LineDesc>,
     #[serde(default)]
     pub title: String,
+    /// Extra terms to cut, such as the counterparty's name.
+    #[serde(default)]
+    pub avoid: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -107,6 +110,46 @@ Rules:\n\
     )
 }
 
+/// Mask things a label never needs: emails, web addresses, IBANs, dates, phone numbers and
+/// numbers of four or more digits. Small numbers ("UBO 2", "section 3.1") stay.
+fn mask(s: &str) -> (String, usize) {
+    use std::sync::OnceLock;
+    static RES: OnceLock<Vec<regex::Regex>> = OnceLock::new();
+    let res = RES.get_or_init(|| {
+        [
+            r"[\w.+-]+@[\w-]+(\.[\w-]+)+",
+            r"(?i)\b(https?://|www\.)\S+",
+            r"(?i)\b[\w-]+(\.[\w-]+)*\.(com|nl|de|be|lu|uk|eu|org|net|ch|fr|ie|it|es|at|us|io|bank)\b(/\S*)?",
+            r"(?i)\b[A-Z]{2}\d{2}(\s?[A-Z0-9]){10,30}\b",
+            r"\b(\d{1,2}[./-]\d{1,2}[./-](\d{4}|\d{2})|\d{4}-\d{2}-\d{2})\b",
+            r"\+?\d[\d\s().-]{6,}\d",
+            r"\d{4,}",
+        ]
+        .iter()
+        .map(|p| regex::Regex::new(p).unwrap())
+        .collect()
+    });
+    let mut out = s.to_string();
+    let mut n = 0;
+    for re in res {
+        // A run only counts as a phone or account number with at least 7 digits in it,
+        // so "(1) (2) (3)" or "1. 2. 3." in a list stays.
+        let mut c = 0;
+        out = re
+            .replace_all(&out, |m: &regex::Captures| {
+                let t = &m[0];
+                if t.chars().filter(|x| x.is_ascii_digit()).count() < 7 && t.chars().any(|x| !x.is_ascii_digit()) && t.starts_with(|x: char| x.is_ascii_digit() || x == '+') && !t.contains('@') && !t.contains('/') && !t.contains('-') {
+                    return t.to_string();
+                }
+                c += 1;
+                "[…]".to_string()
+            })
+            .into_owned();
+        n += c;
+    }
+    (out, n)
+}
+
 fn clip(s: &str, n: usize) -> String {
     let t: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
     if t.chars().count() > n { t.chars().take(n).collect::<String>() + "…" } else { t }
@@ -142,7 +185,8 @@ fn build(req: &MatchRequest, s: &Scrubber) -> (String, usize) {
     let mut removed = 0;
     let mut sc = |t: &str, n: usize| {
         let (o, k) = s.scrub(&clip(t, n));
-        removed += k;
+        let (o, m) = mask(&o);
+        removed += k + m;
         o
     };
     let mut out = String::new();
@@ -177,7 +221,8 @@ pub async fn run(req: MatchRequest, profile_json: &str) -> Result<MatchResult, S
         return Err(format!("Unknown model {}", req.model));
     }
     let key = api_key().ok_or("NOKEY: No Anthropic API key is set. Add one under Profile → Settings.")?;
-    let scrubber = Scrubber::from_profile(profile_json);
+    let mut scrubber = Scrubber::from_profile(profile_json);
+    scrubber.add_terms(&req.avoid);
     let (msg, removed) = build(&req, &scrubber);
     let body = json!({
         "model": req.model,
@@ -220,7 +265,8 @@ pub async fn run(req: MatchRequest, profile_json: &str) -> Result<MatchResult, S
 
 /// What would be sent, for the "show me exactly what goes out" button.
 pub fn preview(req: &MatchRequest, profile_json: &str) -> (String, usize) {
-    let s = Scrubber::from_profile(profile_json);
+    let mut s = Scrubber::from_profile(profile_json);
+    s.add_terms(&req.avoid);
     let (m, n) = build(req, &s);
     (format!("SYSTEM\n{}\n\nUSER\n{}", system_prompt(), m), n)
 }
@@ -228,6 +274,26 @@ pub fn preview(req: &MatchRequest, profile_json: &str) -> (String, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn masks_identifying_bits() {
+        let (o, n) = mask("Send to kyc@bigbank.com or see www.bigbank.nl/privacy, call +31 20 555 1234, IBAN NL91 ABNA 0417 1643 00, ref 2023-0042, dated 14/03/2019");
+        for bad in ["kyc@", "bigbank", "555", "0417", "0042", "2019"] { assert!(!o.contains(bad), "{bad} in {o}"); }
+        assert!(n >= 6);
+        for keep in ["UBO 2: date of birth (dd/mm/yyyy), section 3.1", "Section 2.1.3 Directors", "Tick (1) (2) (3) (4) as applicable", "Form W-8BEN-E, Part 1, line 4"] {
+            assert_eq!(mask(keep).0, keep);
+        }
+    }
+
+    #[test]
+    fn cuts_counterparty_name() {
+        let req: MatchRequest = serde_json::from_str(r##"{"model":"claude-sonnet-5-5","mode":"lines","keys":[],"avoid":["Bigbank Clearing N.V."],
+            "lines":[{"id":"L1","page":1,"text":"BIGBANK CLEARING CLIENT ONBOARDING"},{"id":"L2","page":1,"text":"Legal name:"}]}"##).unwrap();
+        let mut s = Scrubber::from_profile("{}"); s.add_terms(&req.avoid);
+        let (m, _) = build(&req, &s);
+        assert!(!m.to_lowercase().contains("bigbank"), "{m}");
+        assert!(m.contains("Legal name:"));
+    }
 
     #[test]
     fn rejects_smuggled_values() {
