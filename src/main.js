@@ -6,7 +6,8 @@ import '@fontsource/mrs-saint-delafield/400.css';
 import './style.css';
 import Sortable from 'sortablejs';
 import * as host from './host.js';
-import { initKyc, formSection, openProfile, openOfficeForm } from './kyc/ui.js';
+import { initKyc, formSection, openProfile } from './kyc/ui.js';
+import { startOffice } from './kyc/fill.js';
 import { isOfficeName } from './kyc/office.js';
 import { pdfjsLib, mupdf, prepare, inspect, imageToPdf, compose, finalize, renderPngs, splitPages, blankPdf, samplePdf, Cancelled } from './engine.js';
 
@@ -144,6 +145,7 @@ function askUnsaved(what) {
   });
 }
 function resetWorkspace() {
+  kycHooks.reset?.();
   for (const d of S.docs) d.pdf.destroy?.();
   S.docs = []; S.pages = []; S.sel.clear(); S.cur = null; S.selItem = null; S.undo = []; S.redo = [];
   S.stamps = defaultStamps(); S.opts.password = ''; S.path = null; S.title = ''; S.dirty = false; S.colorN = 0;
@@ -155,7 +157,7 @@ function resetWorkspace() {
 async function takeOffice(entries) {
   const off = entries.filter(e => isOfficeName(e.name)); if (!off.length) return entries;
   if (off.length > 1) toast(`Opening ${off[0].name}. Word and Excel forms are filled one at a time.`, 5000);
-  await openOfficeForm(off[0]);
+  await startOffice(off[0]);
   return entries.filter(e => !isOfficeName(e.name));
 }
 
@@ -240,6 +242,7 @@ function reportErrs(errs) { if (errs.length) setTimeout(() => toast(errs.slice(0
 
 async function save(as = false) {
   if (!S.pages.length) return false;
+  if (kycHooks.beforeSave && !(await kycHooks.beforeSave())) return false;
   let path = !as && S.path;
   if (!path) { path = await host.pickSave(defaultSavePath(defaultSaveName(S.path ? '' : ''))); if (!path) return false; }
   const b = busy('Saving…');
@@ -448,7 +451,7 @@ function drawItems(p) {
   const v = pvs.get(p.uid); if (!v?.vp) return; v.layer.replaceChildren();
   for (const it of p.items) {
     let el;
-    if (it.type === 'text') { el = h('div', { class: 'it text' + (it.text ? '' : ' empty'), style: `color:${it.color}` }); el.textContent = it.text; }
+    if (it.type === 'text') { el = h('div', { class: 'it text' + (it.text ? '' : ' empty') + (kycHooks.itemClass?.(it) || ''), style: `color:${it.color}` }); el.textContent = it.text; }
     else if (it.type === 'rect') el = h('div', { class: 'it rect', style: `background:${it.color}` });
     else if (it.type === 'redact') el = h('div', { class: 'it redact', title: 'Redaction: removed when you save' });
     else el = h('div', { class: 'it img' }, h('img', { src: it.src, alt: '' }));
@@ -456,12 +459,13 @@ function drawItems(p) {
     if (S.selItem?.id === it.id) { el.classList.add('on'); if (it.type !== 'text') el.append(h('i', { class: 'grip', 'data-grip': '1' })); }
     positionEl(it, el, v.vp); v.layer.append(el);
   }
+  kycHooks.marks?.(p, v);
 }
 function selectItem(u, id) {
   const prev = S.selItem; S.selItem = id ? { uid: u, id } : null;
   if (prev && prev.uid !== u) { const pp = byUid(prev.uid); if (pp) drawItems(pp); }
   const p = byUid(u); if (p) drawItems(p);
-  if (id) { if (u !== S.cur) setCur(u, false); S.itab = 'page'; renderTabs(); }
+  if (id) { if (u !== S.cur) setCur(u, false); S.itab = 'page'; renderTabs(); if (p?.items.find(i => i.id === id)?.kyc) kycHooks.itemSelected?.(id); }
   renderInsp();
 }
 function findItem() { const s = S.selItem; if (!s) return {}; const p = byUid(s.uid); return { p, it: p?.items.find(i => i.id === s.id) }; }
@@ -517,6 +521,8 @@ pagesEl.addEventListener('pointerdown', e => {
   const r = v.layer.getBoundingClientRect(); const cx = e.clientX - r.left, cy = e.clientY - r.top;
   const el = e.target.closest('.it');
   if (S.cur !== p.uid) setCur(p.uid, false);
+  const kf = e.target.closest('.kf');
+  if (kf && S.tool === 'select') { e.preventDefault(); kycHooks.pick?.(kf.dataset.doc, kf.dataset.name); return; }
   if (el && S.tool === 'select') {
     const it = p.items.find(i => i.id === el.dataset.id); if (!it) return;
     e.preventDefault(); view.focus({ preventScroll: true });
@@ -788,22 +794,24 @@ function inspPage(body) {
 }
 function inspForm(body) {
   const docs = visDocs().filter(d => !d.hidden); const any = docs.some(d => d.fields.length);
-  formSection(body, docs);
+  const filling = formSection(body, docs);
+  const out = filling ? h('details', { class: 'more' }, h('summary', {}, 'All fields and options')) : body;
+  if (filling) body.append(out);
   const flat = h('input', { type: 'checkbox', id: 'f-flat', checked: S.opts.flatten });
   flat.onchange = () => { S.opts.flatten = flat.checked; markDirty(); };
-  body.append(sec('Answers',
-    h('p', { class: 'hint' }, 'Answers are written into the file when you save. Page previews show the original values until then.'),
+  out.append(sec('Answers',
+    h('p', { class: 'hint' }, 'Answers show on the pages straight away and are written into the file when you save.'),
     h('div', { class: 'btns' }, h('button', { class: 'btn', disabled: !any, onclick: loadAnswers }, 'Load answers…'), h('button', { class: 'btn', disabled: !any, onclick: saveAnswers }, 'Save answers…')),
     any ? h('label', { class: 'opt', for: 'f-flat' }, flat, h('div', {}, 'Flatten when saving', h('small', {}, 'Makes answers permanent page content. Combined files and redacted documents are always flattened.'))) : null));
   for (const d of docs) {
     const s = sec(null, h('div', { class: 'file' }, h('i', { style: `background:var(${d.color})` }), h('b', { class: 'nm' }, d.name), h('span', { class: 'pp' }, `${d.fields.length} fields`)));
-    if (!d.fields.length) s.append(h('p', { class: 'hint' }, d.xfa ? 'XFA form with no standard fields. Use Find answer spots above, or the Text tool.' : 'No fillable fields. Use Find answer spots above, or the Text tool to type on the page.'));
+    if (!d.fields.length) s.append(h('p', { class: 'hint' }, d.xfa ? 'XFA form with no standard fields. Use Fill from profile, or the Text tool.' : 'No fillable fields. Use Fill from profile, or the Text tool to type on the page.'));
     else {
       if (d.xfa) s.append(h('p', { class: 'hint' }, 'XFA (LiveCycle) form. Proof fills its standard fields and removes the XFA layer on save, so every reader shows your answers.'));
       d.fields.forEach((f, i) => {
         const cur = f.name in d.values ? d.values[f.name] : f.value; const fid = `f-${d.id}-${i}`;
         const row = h('div', { class: 'frow' + (f.name in d.values ? ' changed' : '') });
-        const set = v => { d.values[f.name] = v; row.classList.add('changed'); updateChrome(); };
+        const set = v => { d.values[f.name] = v; row.classList.add('changed'); updateChrome(); redrawDoc(d); };
         let ctl;
         if (f.kind === 'check') {
           ctl = h('input', { type: 'checkbox', id: fid, disabled: f.ro }); ctl.checked = !!cur; ctl.addEventListener('change', () => set(ctl.checked));
@@ -818,7 +826,7 @@ function inspForm(body) {
         armUndo(ctl); s.append(row);
       });
     }
-    body.append(s);
+    out.append(s);
   }
 }
 async function saveAnswers() {
@@ -1012,24 +1020,50 @@ $('#bOpen').onclick = doOpen; $('#bInsert').onclick = doInsert;
 $('#bSave').onclick = () => save(false); $('#bSaveAs').onclick = () => save(true);
 $('#bUndo').onclick = undo; $('#bRedo').onclick = redo;
 $('#bProfile').onclick = () => openProfile();
+$('#bFill').onclick = () => kycHooks.fillNow?.();
 
-/** Type answers onto pages of a document (flat forms). y is the baseline of the first line. Caller commits. */
+/** Type answers onto pages of a document (flat forms). y is the baseline of the first line. Caller commits. Returns the new items' ids. */
 function placeText(doc, items) {
-  const touched = new Set();
+  const touched = new Set(); const ids = [];
   for (const it of items) {
-    const p = S.pages.find(p => p.doc === doc && p.idx === it.page); if (!p) continue;
-    const n = it.text.split('\n').length;
-    p.items.push({ type: 'text', id: uid(), x: it.x, y: it.y - (1.2 * n - 0.95) * it.size, text: it.text, size: it.size, color: '#111111', theta: (p.doc.proxies[p.idx].rotate + p.rot) % 360 });
-    touched.add(p);
+    const p = S.pages.find(p => p.doc === doc && p.idx === it.page); if (!p) { ids.push(null); continue; }
+    const n = it.text.split('\n').length; const id = uid();
+    p.items.push({ type: 'text', id, x: it.x, y: it.y - (1.2 * n - 0.95) * it.size, text: it.text, size: it.size, color: '#111111', theta: (p.doc.proxies[p.idx].rotate + p.rot) % 360, ...(it.kyc ? { kyc: true } : {}) });
+    touched.add(p); ids.push(id);
   }
   for (const p of touched) { drawItems(p); updateThumb(p); }
+  updateChrome();
+  return ids;
 }
-initKyc({ S, h, sec, modal, toast, busy, commit: () => commit(), renderInsp, updateChrome, insertEntries, openEntries, placeText });
+const kycHooks = {};
+function redrawDoc(d) { for (const p of S.pages) if (!d || p.doc === d) drawItems(p); }
+/** Scroll so a spot on a page (PDF user space rect [x, y, w, h]) is in view. */
+function revealRect(d, pageIdx, rect) {
+  const p = S.pages.find(p => p.doc === d && p.idx === pageIdx); if (!p) return;
+  if (S.cur !== p.uid) setCur(p.uid, false);
+  const v = pvs.get(p.uid); if (!v?.vp || !v.el.isConnected) return;
+  const [, y] = v.vp.convertToViewportPoint(rect[0], rect[1] + rect[3]);
+  view.scrollTo({ top: v.el.offsetTop + y - view.clientHeight * 0.35, behavior: 'smooth' });
+}
+function findText(id) { for (const p of S.pages) { const it = p.items.find(i => i.id === id); if (it) return { p, it }; } return {}; }
+const kycText = {
+  place: placeText,
+  has: id => !!findText(id).it,
+  update(id, patch) {
+    const { p, it } = findText(id); if (!it) return;
+    if (patch.text != null) { const base = it.y + (1.2 * it.text.split('\n').length - 0.95) * it.size; it.text = patch.text; it.y = base - (1.2 * it.text.split('\n').length - 0.95) * it.size; }
+    drawItems(p); updateThumb(p);
+  },
+  remove(id) { const { p } = findText(id); if (!p) return; p.items = p.items.filter(i => i.id !== id); if (S.selItem?.id === id) S.selItem = null; drawItems(p); updateThumb(p); updateChrome(); },
+  pos(id) { const { p, it } = findText(id); if (!it) return null; return { page: p.idx, x: it.x, y: it.y + (1.2 * it.text.split('\n').length - 0.95) * it.size, size: it.size }; },
+  select(id) { const { p, it } = findText(id); if (!it) return; revealRect(p.doc, p.idx, [it.x, it.y, 10, it.size]); selectItem(p.uid, id); },
+};
+initKyc({ S, h, sec, modal, toast, busy, commit: () => commit(), renderInsp, updateChrome, insertEntries, openEntries, placeText, hooks: kycHooks, redrawDoc, revealRect, text: kycText, setTab: t => { S.itab = t; renderTabs(); renderInsp(); } });
 
 document.addEventListener('keydown', e => {
   // Keep webview browser shortcuts (reload, print the app UI, find bar) from firing in a desktop app.
   if (e.key === 'F5' || ((e.ctrlKey || e.metaKey) && ['p', 'f', 'g', 'u', 'j'].includes(e.key.toLowerCase()))) { e.preventDefault(); return; }
-  if ($('.scrim') || $('.busy') || $('.kyc')) return;
+  if ($('.scrim') || $('.busy') || $('.kyc') || $('.kfo')) return;
   if (menuEl && e.key === 'Escape') { closeMenu(); return; }
   const mod = e.ctrlKey || e.metaKey, k = e.key.toLowerCase();
   if (mod) {

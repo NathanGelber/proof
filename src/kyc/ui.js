@@ -7,7 +7,8 @@ import { COUNTRIES } from './countries.js';
 import { K, V, refreshInfo, unlockWith, createWith, lockNow, persist, flush, setValue, computed, rawValue, peopleIn, todayIso, entityById, errKind, errMsg, setSaveErrorHandler, onChange } from './vault.js';
 import { pageLines, describeFields, flatLines, fingerprint, sha256 } from './extract.js';
 import { loadOffice, isOfficeName } from './office.js';
-import { localFields, localLines, claudeMatch, claudeRequest, render, placeOnLine, yesNoOption, learn, libLabel, libKey, isQuestionLine } from './match.js';
+import { localFields, claudeMatch, libLabel, libKey, isQuestionLine, lineLabel } from './match.js';
+import { initFill, fillPanelFor } from './fill.js';
 import { prepare, pdfjsLib } from '../engine.js';
 
 let C; // context from main.js
@@ -19,12 +20,12 @@ setInterval(() => { if (K.P && Date.now() - lastUse > IDLE_MS) { lockNow().then(
 const fmtDate = iso => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || ''); return m ? `${m[3]}-${m[2]}-${m[1]}` : iso || ''; };
 const daysSince = iso => Math.floor((Date.now() - new Date(iso + 'T00:00:00').getTime()) / 86400000);
 const LS_ENT = 'proof.kyc.entity';
-function curEntity() {
+export function curEntity() {
   if (!K.P?.entities.length) return null;
   let id = null; try { id = localStorage.getItem(LS_ENT); } catch {}
   return entityById(id) || K.P.entities[0];
 }
-function setCurEntity(id) { try { localStorage.setItem(LS_ENT, id); } catch {} }
+export function setCurEntity(id) { try { localStorage.setItem(LS_ENT, id); } catch {} }
 
 export function initKyc(ctx) {
   C = ctx;
@@ -35,6 +36,7 @@ export function initKyc(ctx) {
   });
   onChange(() => { if (C.S.itab === 'form') C.renderInsp(); });
   refreshInfo().catch(() => {});
+  initFill(C);
   if (!host.isDesktop) import('./schema.js').then(schema => (window.__kyc = { K, V, setValue, flush, schema }));
 }
 
@@ -529,6 +531,7 @@ function settingsView() {
 }
 
 // ---------------------------------------------------------------- Form tab: fill from profile
+/** The Form tab's top section. Returns true when a fill is running and its list took over. */
 export function formSection(body, docs) {
   const { h, sec } = C;
   const info = K.info;
@@ -536,305 +539,21 @@ export function formSection(body, docs) {
     body.append(sec('Fill from profile',
       h('p', { class: 'hint' }, info?.exists ? 'Your KYC profile is locked.' : 'Keep your KYC answers in one encrypted profile and fill counterparty forms from it.'),
       h('div', { class: 'btns' }, h('button', { class: 'btn primary', onclick: async () => { if (await ensureUnlocked()) C.renderInsp(); } }, info?.exists ? 'Unlock profile' : 'Set up profile'))));
-    return;
+    return false;
   }
+  if (fillPanelFor(docs, body)) return true;
   const ent = curEntity();
-  const sel = h('select', { 'aria-label': 'Entity' }, K.P.entities.map(e => h('option', { value: e.id }, e.name))); if (ent) sel.value = ent.id;
-  sel.onchange = () => { setCurEntity(sel.value); C.renderInsp(); };
-  const target = docs.find(d => d.fields.length) || docs[0];
   body.append(sec('Fill from profile',
-    K.P.entities.length > 1 ? h('label', { class: 'fld' }, h('span', { class: 'lbl' }, 'Entity'), sel) : h('p', { class: 'hint' }, `As ${ent?.name || '—'}`),
-    docs.length > 1 ? h('p', { class: 'hint' }, `Works on ${target.name}.`) : null,
+    h('p', { class: 'hint' }, `Fills what Proof is sure of straight onto the pages, as ${ent?.name || '—'}, and lists only what needs you.`),
     h('div', { class: 'btns' },
-      h('button', { class: 'btn primary', disabled: !ent || !target, onclick: () => startFill(target) }, target?.fields.length ? 'Match fields…' : 'Find answer spots…'),
+      h('button', { class: 'btn primary', disabled: !ent || !docs.length, onclick: () => C.hooks.fillNow() }, 'Fill from profile'),
       h('button', { class: 'btn', disabled: !ent, onclick: attachDocs }, 'Attach documents…'),
       h('button', { class: 'btn quiet', onclick: () => openProfile() }, 'Profile'))));
-}
-
-async function startFill(doc) {
-  if (!(await ensureUnlocked())) return;
-  const ent = curEntity(); if (!ent) return;
-  const b = C.busy('Reading the form…');
-  let lines, fields, fp;
-  try {
-    lines = await pageLines(doc);
-    fields = doc.fields.length ? await describeFields(doc, lines) : [];
-    fp = await fingerprint(doc, fields, lines);
-  } catch (e) { b.done(); C.toast('Couldn’t read the form: ' + (e?.message || e), 7000); return; }
-  b.done();
-  const flat = !fields.length;
-  const fl = flat ? flatLines(lines) : null;
-  if (flat && !fl.length) { C.toast('This form has no fillable fields and no text Proof can read (it may be a scan). Use the Text tool, or run it through OCR first.', 8000); return; }
-  const saved = K.P.mappings[fp];
-  await refreshInfo().catch(() => {});
-  review({ doc, ent, fields, lines: fl, flat, fp, saved });
-}
-
-/** A Word or Excel form: read it, then review. The answers go into a new copy. */
-export async function openOfficeForm(entry) {
-  if (!(await ensureUnlocked())) return;
-  const ent = curEntity(); if (!ent) { openProfile('identity'); return; }
-  const b = C.busy('Reading the form…'); let od;
-  try { od = await loadOffice(entry.bytes, entry.name); }
-  catch (e) { b.done(); C.toast(e?.message || String(e), 8000); return; }
-  b.done();
-  if (!od.slots.length) { C.toast(`Proof couldn’t find any spots for answers in ${entry.name}: no empty cells beside labels, blanks, form fields or tick boxes.`, 8000); return; }
-  const fp = 'office:' + await sha256(JSON.stringify([od.kind, od.slots.map(s => [s.name, s.left, s.above, s.tip, s.right])]));
-  await refreshInfo().catch(() => {});
-  review({ doc: { name: entry.name, path: entry.path }, ent, fields: od.slots, lines: null, flat: false, office: od, fp, saved: K.P.mappings[fp] });
-}
-
-// ---- review
-function review(R) {
-  const { h, modal } = C; const { ent, flat } = R;
-  // Rows: one per field (fillable) or one per proposal (flat).
-  const rows = [];
-  const byId = new Map((flat ? R.lines : R.fields).map(x => [x.id, x]));
-  const optKeys = keyOptions(ent);
-  const mkRow = (target, p) => {
-    const r = { target, key: p?.key || null, as: p?.as || '', confidence: p?.confidence || null, note: p?.note || '', source: p?.source || null, place: p?.place, option: p?.option, label: p?.label, pos: p?.pos || null, include: false, touched: false };
-    r.include = defaultInclude(r); rows.push(r); return r;
-  };
-  const props = () => {
-    if (R.saved) {
-      if (!flat) for (const f of R.fields) { const e = R.saved.entries[f.name]; if (e && !e.skip) mkRow(f, { ...e, confidence: 'saved', source: 'saved' }); }
-      else for (const e of R.saved.entries) mkRow({ id: 'S' + rows.length, page: e.page, text: e.lineText || '', saved: true }, { key: e.key, as: e.as, confidence: 'saved', source: 'saved', pos: { x: e.x, y: e.y, size: e.size } });
-    }
-    const have = new Set(rows.map(r => r.target.id));
-    const local = flat ? localLines(ent, R.lines) : localFields(ent, R.fields.filter(f => !R.saved || !(f.name in R.saved.entries)));
-    for (const p of local) if (flat || !have.has(p.id)) mkRow(byId.get(p.id), p);
-    if (!flat) for (const f of R.fields) if (!f.ro && !rows.some(r => r.target === f) && !(R.saved?.entries[f.name]?.skip)) mkRow(f, null);
-  };
-  props();
-  let filter = 'all', running = false;
-  const datalist = h('datalist', { id: 'kyc-keys' }, optKeys.map(([lab]) => h('option', { value: lab })));
-  const labelToKey = new Map(optKeys);
-  const tbody = h('div', { class: 'rv-rows' });
-  const counts = h('span', { class: 'rv-count' });
-  const cp = h('input', { type: 'text', id: 'rv-cp', placeholder: 'e.g. ABN AMRO Clearing' });
-  cp.value = guessCounterparty(R.doc);
-  const applyBtn = h('button', { class: 'btn primary', onclick: apply }, 'Apply');
-  const info = K.info || {};
-  const canClaude = K.P.settings.useClaude !== false;
-  const cBtn = h('button', { class: 'btn', disabled: !info.has_key || !canClaude, onclick: runClaude, title: info.has_key ? '' : 'Add an API key under Profile → Settings' }, 'Match the rest with Claude');
-  const seg = h('div', { class: 'seg' });
-  const drawSeg = () => seg.replaceChildren(...[['all', 'All'], ['attn', 'Needs a look'], ['none', 'Unmatched']].map(([k, l]) => h('button', { 'aria-pressed': String(filter === k), onclick: () => { filter = k; drawSeg(); draw(); } }, l)));
-  drawSeg();
-  const m = modal('Fill from profile',
-    h('p', { class: 'hint' }, `${ent.name} → ${R.doc.name}${R.saved ? ` · recognised from ${fmtDate(R.saved.updated)}` : ''}${flat ? ' · no fillable fields: answers are typed onto the page, and you can drag them into place afterwards' : ''}${R.office ? ` · ${R.office.kind === 'xlsx' ? 'Excel' : 'Word'} form: answers go into a copy, the original stays as it is` : ''}`),
-    h('div', { class: 'rv-bar' }, canClaude ? cBtn : null, canClaude ? h('button', { class: 'btn quiet', onclick: showSent }, 'What gets sent?') : null, h('span', { class: 'sp' }), seg),
-    h('div', { class: 'rv-head' }, h('span', {}, ''), h('span', {}, flat ? 'Line on the form' : 'Field'), h('span', {}, 'Profile item'), h('span', {}, 'Answer'), h('span', {}, '')),
-    tbody, datalist,
-    h('div', { class: 'rv-foot' }, h('label', { class: 'fld', for: 'rv-cp' }, h('span', { class: 'lbl' }, 'Sent to (for the record)'), cp), counts),
-    h('div', { class: 'actions' }, h('button', { class: 'btn quiet', onclick: () => m.close() }, 'Cancel'), applyBtn));
-  m.modal.classList.add('wide');
-
-  function attention(r) {
-    const res = r.key ? render(ent, r.key, r.as, fieldOf(r)) : null;
-    return !r.key || r.confidence === 'low' || r.confidence === 'medium' || r.note || res?.missing || res?.problem || ['check', 'radio', 'select'].includes(fieldOf(r).kind) || keyDef(ent, r.key)?.kind === 'longtext';
-  }
-  function fieldOf(r) { return flat ? { kind: r.place === 'mark' ? 'check' : 'text' } : r.target; }
-  function defaultInclude(r) {
-    if (!r.key) return false;
-    const res = render(ent, r.key, r.as, fieldOf(r));
-    if (res.missing || res.problem) return false;
-    if (r.confidence === 'saved') return true;
-    return r.confidence === 'high' && (flat ? r.place !== 'mark' : r.target.kind === 'text') && keyDef(ent, r.key)?.kind !== 'longtext' && !r.note;
-  }
-  function draw() {
-    const vis = rows.filter(r => filter === 'all' || (filter === 'attn' ? r.key && attention(r) : !r.key));
-    tbody.replaceChildren(...(vis.length ? vis.map(rowEl) : [h('p', { class: 'hint' }, 'Nothing here.')]));
-    const n = rows.filter(r => r.include && r.key).length;
-    counts.textContent = `${rows.filter(r => r.key).length} of ${rows.length} matched · ${n} will be filled`;
-    applyBtn.textContent = R.office ? (n ? `Fill ${n} and save…` : 'Fill and save…') : n ? `Fill ${n}` : 'Fill'; applyBtn.disabled = !n;
-  }
-  function rowEl(r) {
-    const f = r.target; const res = r.key ? render(ent, r.key, r.as, fieldOf(r)) : null;
-    const inc = h('input', { type: 'checkbox', 'aria-label': 'Fill this', checked: r.include, disabled: !r.key || res?.missing });
-    inc.onchange = () => { r.include = inc.checked; draw(); };
-    const item = h('input', { type: 'text', list: 'kyc-keys', 'aria-label': 'Profile item', placeholder: '— leave empty', spellcheck: 'false' });
-    item.value = r.key ? keyLabel(ent, r.key) : '';
-    item.addEventListener('change', () => {
-      const v = item.value.trim();
-      const k = !v ? null : labelToKey.get(v) || (keyDef(ent, v) ? v : undefined);
-      if (k === undefined) { item.classList.add('bad'); return; }
-      r.key = k; r.touched = true; r.confidence = 'you'; r.note = '';
-      if (k) r.as = defaultAs(ent, k, fieldOf(r), r.as);
-      r.include = !!k && !render(ent, k, r.as, fieldOf(r)).missing; draw();
-    });
-    const as = h('input', { type: 'text', class: 'rv-as', 'aria-label': 'How to write it', value: r.as, title: 'How the value is written: text, date:DD-MM-YYYY, country:iso2, check, check:!yes, select, upper, literal:N/A', spellcheck: 'false' });
-    as.addEventListener('change', () => { r.as = as.value.trim(); r.touched = true; draw(); });
-    const fieldCell = flat
-      ? h('div', { class: 'rv-f' }, h('b', {}, f.text || '(saved position)'), h('small', {}, `p${f.page}${r.place ? ' · answer ' + ({ right: 'to the right', below: 'below', mark: r.option === '@yesno' ? 'as a tick on yes or no' : 'as a tick on “' + (r.option || '') + '”' })[r.place] : ''}`))
-      : h('div', { class: 'rv-f' }, h('b', {}, fieldLabel(f)), h('small', {}, `${f.where || 'p' + f.page} · ${f.kind}${f.section ? ' · ' + f.section : ''}${f.where ? '' : ' · ' + f.name}`));
-    const ans = !r.key ? h('span', { class: 'rv-none' }, 'Not filled')
-      : res.missing ? h('span', { class: 'rv-miss' }, 'Not in the profile')
-      : h('span', { class: 'rv-ans' + (res.problem ? ' warn' : '') }, res.show, res.problem ? h('small', {}, res.problem) : null);
-    const conf = r.confidence ? h('span', { class: 'chip c-' + r.confidence, title: r.source === 'claude' ? 'Matched by Claude' : r.source === 'local' ? 'Matched on this computer' : '' }, r.confidence === 'you' ? 'yours' : r.confidence) : h('span', {});
-    return h('div', { class: 'rv-row' + (r.include ? ' on' : '') }, inc, fieldCell, h('div', { class: 'rv-k' }, item, as), h('div', {}, ans, r.note ? h('div', { class: 'rv-note' }, r.note) : null), conf);
-  }
-  async function runClaude() {
-    if (running) return; running = true; cBtn.disabled = true; cBtn.textContent = 'Asking Claude…';
-    try {
-      // Only what's still open: fields without a saved or hand-made answer.
-      const open = flat ? R.lines : R.fields.filter(f => !f.ro && !rows.some(r => r.target === f && (r.source === 'saved' || r.touched)));
-      const { matches, removed } = await claudeMatch(ent, flat ? { lines: open, avoid: [cp.value] } : { fields: open, avoid: [cp.value] }, (i, n) => (cBtn.textContent = n > 1 ? `Asking Claude… ${i}/${n}` : 'Asking Claude…'));
-      let changed = 0;
-      for (const p of matches) {
-        if (flat) {
-          if (!p.key) continue;
-          if (p.place === 'mark') { const i = rows.findIndex(r => r.target.id === p.id && r.key === p.key && r.option === '@yesno'); if (i >= 0) rows.splice(i, 1); }
-          const dup = rows.find(r => r.target.id === p.id && r.key === p.key && (r.option || '') === (p.option || ''));
-          if (dup && dup.source !== 'saved') { Object.assign(dup, { as: p.as || dup.as, confidence: p.confidence, note: p.note, place: p.place || dup.place, option: p.option, label: p.label || dup.label, source: 'claude' }); dup.include = defaultInclude(dup); changed++; continue; }
-          if (!dup) { mkRow(byId.get(p.id), p); changed++; }
-          continue;
-        }
-        const r = rows.find(r => r.target.id === p.id);
-        if (!r || r.touched || r.source === 'saved') continue;
-        // Claude decides for fields the local matcher left open, and overrides weak local guesses.
-        if (r.key && r.confidence === 'high' && r.source === 'local' && p.key !== r.key && p.confidence !== 'high') continue;
-        Object.assign(r, { key: p.key, as: p.key ? (p.as || defaultAs(ent, p.key, r.target, '')) : '', confidence: p.confidence, note: p.note, source: 'claude' });
-        r.include = defaultInclude(r); changed++;
-      }
-      if (flat) rows.sort((a, b) => (a.target.page - b.target.page) || (b.target.y ?? 0) - (a.target.y ?? 0));
-      C.toast(`Claude matched ${changed} item${changed === 1 ? '' : 's'}.${removed ? ` ${removed} bit${removed > 1 ? 's' : ''} of form text matching your profile ${removed > 1 ? 'were' : 'was'} cut before sending.` : ''}`, 6000);
-      draw();
-    } catch (e) {
-      C.toast(errKind(e) === 'NOKEY' ? errMsg(e) : 'Claude matching failed: ' + errMsg(e), 8000);
-    } finally { running = false; cBtn.disabled = false; cBtn.textContent = 'Match the rest with Claude'; }
-  }
-  async function showSent() {
-    const open = flat ? R.lines : R.fields.filter(f => !f.ro).slice(0, 140);
-    try {
-      const [text, removed] = await V.preview(claudeRequest(ent, flat ? { lines: open.filter(isQuestionLine).slice(0, 260), avoid: [cp.value] } : { fields: open, avoid: [cp.value] }));
-      const pre = h('pre', { class: 'rv-pre' }); pre.textContent = text;
-      const mm = modal('What gets sent', h('p', { class: 'hint' }, `This is the exact request text${(flat ? R.lines.length > 260 : R.fields.length > 140) ? ' (first part; large forms go in several requests)' : ''}. ${removed ? `${removed} bit${removed > 1 ? 's' : ''} matching your profile ${removed > 1 ? 'were' : 'was'} replaced with […].` : 'Nothing in it matched a value in your profile.'}`), pre,
-        h('div', { class: 'actions' }, h('button', { class: 'btn primary', onclick: () => mm.close() }, 'Close')));
-      mm.modal.classList.add('wide');
-    } catch (e) { C.toast(errMsg(e), 6000); }
-  }
-  async function apply() {
-    const use = rows.filter(r => r.include && r.key);
-    const fields = []; let n = 0; const errs = [];
-    if (R.office) {
-      const values = new Map();
-      for (const r of use) {
-        const res = render(ent, r.key, r.as, r.target);
-        if (res.missing || (res.problem && !res.value && res.value !== false)) { errs.push(r.target.name); continue; }
-        let v = res.value;
-        if (typeof v === 'boolean' && r.target.kind !== 'check') { if (!v) continue; v = 'X'; }
-        // Real numbers in Excel only for numeric items (a percentage); identifiers stay text.
-        if (R.office.kind === 'xlsx' && keyDef(ent, r.key)?.kind === 'number' && /^-?\d+(\.\d+)?$/.test(String(v))) v = Number(v);
-        values.set(r.target.name, v); n++;
-        fields.push(logField(fieldLabel(r.target), r.key, res.show));
-      }
-      const ext = R.office.kind === 'xlsx' ? (/\.xlsm$/i.test(R.doc.name) ? 'xlsm' : 'xlsx') : (/\.docm$/i.test(R.doc.name) ? 'docm' : 'docx');
-      const stem = R.doc.name.replace(/\.[^.]+$/, '');
-      const def = (R.doc.path ? host.joinPath(host.dirName(R.doc.path), '') : '') + `${stem} - filled.${ext}`;
-      const path = await host.pickSave(def, { name: R.office.kind === 'xlsx' ? 'Excel workbook' : 'Word document', ext });
-      if (!path) return;
-      const b = C.busy('Writing…');
-      try { const bytes = await R.office.save(values); await host.writePath(path, bytes); }
-      catch (e) { b.done(); C.toast('Couldn’t save: ' + (e?.message || e), 8000); return; }
-      b.done();
-      const entries = {};
-      for (const r of rows) if (r.include && r.key) entries[r.target.name] = { key: r.key, as: r.as };
-      for (const r of rows) if (r.touched && !r.key) entries[r.target.name] = { skip: true };
-      K.P.mappings[R.fp] = { title: R.doc.name, kind: R.office.kind, updated: todayIso(), entries };
-      learnRows();
-      K.P.log.unshift({ at: new Date().toISOString(), entity: ent.id, counterparty: cp.value.trim(), file: R.doc.name, fp: R.fp, fields });
-      if (K.P.log.length > 5000) K.P.log.length = 5000;
-      persist(); touch(); m.close();
-      C.toast(`Filled ${n} answers and saved ${path.startsWith('download:') ? path.slice(9) : host.baseName(path)}.${errs.length ? ` ${errs.length} couldn’t be filled.` : ''} The original is untouched.`, 7000);
-      return;
-    }
-    C.commit();
-    if (!flat) {
-      const d = R.doc;
-      for (const r of use) {
-        const res = render(ent, r.key, r.as, r.target);
-        if (res.missing || (res.problem && !res.value && res.value !== false)) { errs.push(r.target.name); continue; }
-        d.values[r.target.name] = res.value; n++;
-        fields.push(logField(fieldLabel(r.target), r.key, res.show));
-      }
-    } else {
-      const items = [];
-      for (const r of use) {
-        const res = render(ent, r.key, r.as, fieldOf(r)); if (res.missing) continue;
-        const isMark = r.place === 'mark';
-        const opt = isMark && r.option === '@yesno' ? yesNoOption(r.target, rawValue(ent, r.key)) : r.option;
-        if (isMark && !r.pos && !opt) continue;
-        const pos = r.pos || placeOnLine(r.target, { ...r, option: opt }, null);
-        if (isMark && !res.value) continue;
-        const text = isMark ? 'X' : wrap(res.show, pos, R.doc, r.target.page - 1);
-        items.push({ page: r.target.page - 1, x: pos.x, y: pos.y, size: pos.size, text, r });
-        n++; fields.push(logField(r.target.text || keyLabel(ent, r.key), r.key, isMark ? 'X' : res.show));
-      }
-      C.placeText(R.doc, items.map(({ page, x, y, size, text }) => ({ page, x, y, size, text })));
-      R.placed = items;
-    }
-    // Remember this form.
-    const entries = flat ? R.placed.map(i => ({ key: i.r.key, as: i.r.as, page: i.page + 1, x: i.x, y: i.y, size: i.size, lineText: i.r.target.text })) : {};
-    if (!flat) {
-      for (const r of rows) if (r.include && r.key) entries[r.target.name] = { key: r.key, as: r.as };
-      for (const r of rows) if (r.touched && !r.key) entries[r.target.name] = { skip: true };
-    }
-    K.P.mappings[R.fp] = { title: R.doc.name, kind: flat ? 'flat' : 'acro', updated: todayIso(), entries };
-    learnRows();
-    K.P.log.unshift({ at: new Date().toISOString(), entity: ent.id, counterparty: cp.value.trim(), file: R.doc.name, fp: R.fp, fields });
-    if (K.P.log.length > 5000) K.P.log.length = 5000;
-    persist(); touch();
-    m.close(); C.renderInsp(); C.updateChrome(); C.redrawPages?.();
-    C.toast(`Filled ${n} ${flat ? 'answers' : 'fields'}.${errs.length ? ` ${errs.length} couldn’t be filled.` : ''} Check them on the pages, then save.`, 6000);
-  }
-  /** Every answer you applied teaches the library its label. */
-  function learnRows() {
-    for (const r of rows) {
-      if (!r.include || !r.key) continue;
-      if (flat) { if (r.place !== 'mark' && r.target.text) learn(r.label || lineLabel(r.target.text), r.key, r.as, 'text'); }
-      else learn(libLabel(r.target), r.key, r.as, r.target.kind);
-    }
-  }
-  function logField(label, key, value) { const d = keyDef(ent, key); return { label: String(label || '').slice(0, 160), key, value: String(value), ...(d && ENUM_KINDS.has(d.kind) ? { e: true } : {}) }; }
-  draw();
-}
-
-const lineLabel = t => (/^(.*?)(?::|_{3,}|\.{4,}|\s{2,}|$)/.exec(t) || [, t])[1].trim();
-const fieldLabel = f => (f.kind === 'check' ? (f.where && f.left && f.right ? `${f.left} → ${f.right}` : f.right || f.tip || f.left || f.inside || f.above) : f.tip || f.left || f.above || f.inside || f.right) || f.nice || f.name;
-
-function wrap(text, pos, doc, pageIdx) {
-  if (!text.includes('\n') && text.length < 60) return text;
-  let W = 595; try { const vp = doc.proxies[pageIdx].getViewport({ scale: 1 }); W = vp.viewBox[2]; } catch {}
-  const max = Math.max(20, Math.floor((W - pos.x - 36) / (pos.size * 0.5)));
-  return text.split('\n').map(par => { const out = []; let line = ''; for (const w of par.split(/\s+/)) { if ((line + ' ' + w).trim().length > max) { if (line) out.push(line); line = w; } else line = (line + ' ' + w).trim(); } if (line) out.push(line); return out.join('\n'); }).join('\n');
-}
-
-function defaultAs(ent, key, field, prev) {
-  const d = keyDef(ent, key); const fk = field?.kind || 'text';
-  if (fk === 'check') return prev?.startsWith('check') ? prev : 'check';
-  if (fk === 'select' || fk === 'radio') return 'select';
-  if (d?.kind === 'date') return prev?.startsWith('date:') ? prev : 'date:' + (K.P?.settings?.dateFormat || 'DD-MM-YYYY');
-  if (d?.kind === 'country') return prev?.startsWith('country:') ? prev : 'country:name';
-  return 'text';
-}
-
-function keyOptions(ent) {
-  const out = [];
-  for (const d of [...entityKeys(ent), ...SPECIAL_KEYS]) out.push([d.label, d.key]);
-  for (const r of ROLES) {
-    const n = Math.min(8, Math.max(peopleIn(ent, r.role).length, r.role === 'shareholder' ? 0 : 1) + 1);
-    for (let i = 1; i <= n; i++) for (const d of personKeys(ent)) out.push([`${r.label} ${i} · ${d.label}`, `${r.role}.${i}.${d.key}`]);
-  }
-  return out;
-}
-
-function guessCounterparty(doc) {
-  const prev = K.P.log.find(l => l.file === doc.name);
-  return prev?.counterparty || '';
+  return false;
 }
 
 // ---- attach stored documents
-async function attachDocs() {
+export async function attachDocs() {
   if (!(await ensureUnlocked())) return;
   const ent = curEntity(); const { h, modal } = C;
   if (!ent.docs.length) { C.toast('No documents in the profile yet. Add them under Profile → Documents.', 6000); openProfile('docs'); return; }

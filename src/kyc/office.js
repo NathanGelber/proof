@@ -308,7 +308,7 @@ async function docx(zip, name) {
   slots.sort((a, b) => a.order[0] - b.order[0] || b.order[1] - a.order[1]);
   slots.forEach((s, i) => (s.id = 'f' + (i + 1)));
   return {
-    kind: 'docx', name, slots,
+    kind: 'docx', name, slots, dom: doc,
     async save(values) {
       // Within a paragraph, write from the end backwards so earlier positions stay valid.
       const order = [...slots].sort((a, b) => a.order[0] - b.order[0] || a.order[1] - b.order[1]);
@@ -433,7 +433,7 @@ async function xlsx(zip, name) {
   }
 
   return {
-    kind: 'xlsx', name, slots,
+    kind: 'xlsx', name, slots, sheets: sheets.map(sh => ({ name: sh.name, state: sh.state, cells: sh.cells, merges: sh.merges, hiddenRows: sh.hiddenRows })),
     async save(values) {
       const touched = new Set();
       for (const s of slots) if (values.has(s.name)) { s.write(values.get(s.name)); touched.add(sheets[s.order[0]]); }

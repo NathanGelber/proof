@@ -58,9 +58,25 @@ export async function prepare(bytes, askPassword) {
   } finally { doc.destroy?.(); }
 }
 
+/** Page index of a widget annotation, or -1. */
+function widgetPager(ld) {
+  const pages = ld.getPages();
+  const refIdx = new Map(pages.map((p, i) => [p.ref.toString(), i]));
+  const annotIdx = new Map();
+  pages.forEach((p, i) => { try { for (const r of p.node.Annots()?.asArray() || []) annotIdx.set(r.toString(), i); } catch {} });
+  return w => {
+    let pi = -1;
+    try { const P = w.P(); if (P) pi = refIdx.get(P.toString()) ?? -1; } catch {}
+    if (pi < 0) { const r = ld.context.getObjectRef(w.dict); if (r) pi = annotIdx.get(r.toString()) ?? -1; }
+    return pi;
+  };
+}
+
 export function readFields(ld) {
   const out = [];
   let form; try { form = ld.getForm(); } catch { return { fields: out, xfa: false }; }
+  const pageOf = widgetPager(ld);
+  const widgets = f => { try { return f.acroField.getWidgets().map(w => { const r = w.getRectangle(); return { page: pageOf(w), rect: [r.x, r.y, r.width, r.height] }; }).filter(w => w.page >= 0); } catch { return []; } };
   let xfa = false; try { xfa = form.hasXFA(); } catch {}
   let fs = []; try { fs = form.getFields(); } catch {}
   for (const f of fs) {
@@ -72,6 +88,7 @@ export function readFields(ld) {
       else if (f instanceof PDFRadioGroup) out.push({ name, kind: 'radio', options: f.getOptions(), value: f.getSelected() || '', ro });
       else if (f instanceof PDFOptionList) out.push({ name, kind: 'select', options: f.getOptions(), value: f.getSelected()[0] || '', ro });
     } catch {}
+    if (out.length && out[out.length - 1].name === name) { out[out.length - 1].widgets = widgets(f); try { out[out.length - 1].maxLen = f instanceof PDFTextField ? f.getMaxLength() || 0 : 0; } catch {} }
   }
   return { fields: out, xfa };
 }

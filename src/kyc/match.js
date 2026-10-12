@@ -335,6 +335,25 @@ export async function claudeMatch(ent, { fields, lines, avoid }, onProgress) {
   return { matches: all, removed };
 }
 
+/** The label text before a colon or blank on a line of a flat form. */
+export const lineLabel = t => (/^(.*?)(?::|_{3,}|\.{4,}|\s{2,}|$)/.exec(t) || [, t])[1].trim();
+/** What to call a field in lists: its printed label, or for a tick box, the option beside it. */
+export const fieldLabel = f => (f.kind === 'check' ? (f.where && f.left && f.right ? `${f.left} → ${f.right}` : f.right || f.tip || f.left || f.inside || f.above) : f.tip || f.left || f.above || f.inside || f.right) || f.text || f.nice || f.name || '';
+
+/** How to write a value into a field, worked out from the item and the field's own label. */
+export function autoAs(ent, key, f) {
+  const d = keyDef(ent, key); const fk = f?.kind || 'text';
+  const text = [f?.tip, f?.left, f?.above, f?.inside, f?.text].filter(Boolean).join(' ');
+  if (fk === 'check') {
+    if (d?.kind === 'choice') { const lab = norm(f.right || f.left || f.tip || ''); const ch = d.choices.find(c => lab && (lab === norm(c) || lab.includes(norm(c)))); return ch ? 'check:' + ch : 'check'; }
+    return /\b(no|nee|non|nein)\b/.test(norm(f.right || '')) ? 'check:!yes' : 'check';
+  }
+  if (fk === 'select' || fk === 'radio') return 'select';
+  if (d?.kind === 'date') return dateAs(text);
+  if (d?.kind === 'country') return countryAs(f || {}, text);
+  return 'text';
+}
+
 /** For a yes/no tick on a flat form: the option text on the line that matches the value. */
 export function yesNoOption(line, raw) {
   const words = (isYes(raw) ? ['yes', 'ja', 'oui', 'y'] : ['no', 'nee', 'non', 'n']);
