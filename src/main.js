@@ -6,6 +6,7 @@ import '@fontsource/mrs-saint-delafield/400.css';
 import './style.css';
 import Sortable from 'sortablejs';
 import * as host from './host.js';
+import { initKyc, formSection, openProfile } from './kyc/ui.js';
 import { pdfjsLib, mupdf, prepare, inspect, imageToPdf, compose, finalize, renderPngs, splitPages, blankPdf, samplePdf, Cancelled } from './engine.js';
 
 mupdf(); // start loading the engine in the background
@@ -776,6 +777,7 @@ function inspPage(body) {
 }
 function inspForm(body) {
   const docs = visDocs().filter(d => !d.hidden); const any = docs.some(d => d.fields.length);
+  formSection(body, docs);
   const flat = h('input', { type: 'checkbox', id: 'f-flat', checked: S.opts.flatten });
   flat.onchange = () => { S.opts.flatten = flat.checked; markDirty(); };
   body.append(sec('Answers',
@@ -784,7 +786,7 @@ function inspForm(body) {
     any ? h('label', { class: 'opt', for: 'f-flat' }, flat, h('div', {}, 'Flatten when saving', h('small', {}, 'Makes answers permanent page content. Combined files and redacted documents are always flattened.'))) : null));
   for (const d of docs) {
     const s = sec(null, h('div', { class: 'file' }, h('i', { style: `background:var(${d.color})` }), h('b', { class: 'nm' }, d.name), h('span', { class: 'pp' }, `${d.fields.length} fields`)));
-    if (!d.fields.length) s.append(h('p', { class: 'hint' }, d.xfa ? 'XFA form with no standard fields. Use the Text tool to type on it.' : 'No fillable fields. Use the Text tool to type on the page.'));
+    if (!d.fields.length) s.append(h('p', { class: 'hint' }, d.xfa ? 'XFA form with no standard fields. Use Find answer spots above, or the Text tool.' : 'No fillable fields. Use Find answer spots above, or the Text tool to type on the page.'));
     else {
       if (d.xfa) s.append(h('p', { class: 'hint' }, 'XFA (LiveCycle) form. Proof fills its standard fields and removes the XFA layer on save, so every reader shows your answers.'));
       d.fields.forEach((f, i) => {
@@ -998,11 +1000,25 @@ async function doInsert() { if (!S.pages.length) return doOpen(); const e = awai
 $('#bOpen').onclick = doOpen; $('#bInsert').onclick = doInsert;
 $('#bSave').onclick = () => save(false); $('#bSaveAs').onclick = () => save(true);
 $('#bUndo').onclick = undo; $('#bRedo').onclick = redo;
+$('#bProfile').onclick = () => openProfile();
+
+/** Type answers onto pages of a document (flat forms). y is the baseline of the first line. Caller commits. */
+function placeText(doc, items) {
+  const touched = new Set();
+  for (const it of items) {
+    const p = S.pages.find(p => p.doc === doc && p.idx === it.page); if (!p) continue;
+    const n = it.text.split('\n').length;
+    p.items.push({ type: 'text', id: uid(), x: it.x, y: it.y - (1.2 * n - 0.95) * it.size, text: it.text, size: it.size, color: '#111111', theta: (p.doc.proxies[p.idx].rotate + p.rot) % 360 });
+    touched.add(p);
+  }
+  for (const p of touched) { drawItems(p); updateThumb(p); }
+}
+initKyc({ S, h, sec, modal, toast, busy, commit: () => commit(), renderInsp, updateChrome, insertEntries, openEntries, placeText });
 
 document.addEventListener('keydown', e => {
   // Keep webview browser shortcuts (reload, print the app UI, find bar) from firing in a desktop app.
   if (e.key === 'F5' || ((e.ctrlKey || e.metaKey) && ['p', 'f', 'g', 'u', 'j'].includes(e.key.toLowerCase()))) { e.preventDefault(); return; }
-  if ($('.scrim') || $('.busy')) return;
+  if ($('.scrim') || $('.busy') || $('.kyc')) return;
   if (menuEl && e.key === 'Escape') { closeMenu(); return; }
   const mod = e.ctrlKey || e.metaKey, k = e.key.toLowerCase();
   if (mod) {
