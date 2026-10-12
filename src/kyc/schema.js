@@ -129,6 +129,97 @@ export const SPECIAL_KEYS = [
   k('today', 'Today’s date', 'date', ['date', 'datum', 'date signed', 'signing date', 'dated', 'place and date', 'date of signature']),
 ];
 
+// More English wording, as used on bank onboarding forms, Wolfsberg questionnaires, FATCA/CRS
+// self-certifications and W-8BEN-E. Merged into the lists above.
+const MORE = {
+  legal_name: ['client name', 'customer name', 'name of applicant', 'applicant name', 'client legal name', 'entity legal name', 'registered company name', 'full registered name', 'name of legal person', 'name of corporation', 'company legal name', 'legal entity name', 'official name', 'name as registered', 'registered legal name', 'name of business', 'business legal name', 'corporate name', 'name of the organisation', 'name of the organization', 'name of the institution', 'exact legal name', 'full name of company', 'full name of the company', 'full name of entity', 'full name of the entity', 'name of the client', 'customer legal name', 'name of client entity', 'account holder name entity', 'name of organisation'],
+  trade_name: ['trading as', 't a', 'business name if different', 'other names used', 'alternative name', 'also known as', 'aka', 'brand name', 'commercial name', 'trading names', 'other trading names'],
+  legal_form: ['type of company', 'type of organisation', 'type of organization', 'entity form', 'corporate form', 'legal type', 'form of entity', 'legal status of entity', 'type of legal person', 'legal entity type', 'company form', 'type of legal entity', 'entity structure', 'nature of legal entity', 'legal form of entity'],
+  reg_number: ['company registration no', 'registration no', 'reg no', 'reg number', 'registered number', 'business registration number', 'commercial registry number', 'commercial register no', 'chamber of commerce registration number', 'coc registration number', 'kvk registration number', 'registry no', 'company no', 'companies house number', 'crn', 'incorporation no', 'certificate of incorporation number', 'trade register no', 'registration id', 'corporate registration number', 'entity registration number', 'official registration number', 'national registration number', 'company id', 'company identification number'],
+  reg_authority: ['registering authority', 'registration body', 'name of registry', 'registry name', 'registered in', 'company registry', 'registrar', 'register of companies', 'registered with', 'name of the register'],
+  inc_country: ['country in which the entity is incorporated', 'country in which the company is incorporated', 'country where the entity is incorporated', 'country where the company is incorporated', 'country of domicile', 'jurisdiction of registration', 'incorporated in', 'country of organisation', 'country of organization', 'country where incorporated', 'home jurisdiction', 'registered country', 'country of legal domicile', 'country of registration incorporation', 'jurisdiction of formation', 'country of incorporation or organization', 'country of incorporation or organisation'],
+  inc_date: ['when was the company incorporated', 'when was the entity incorporated', 'date incorporated', 'formation date', 'establishment date', 'registration date', 'commencement date', 'date of constitution', 'date company was formed', 'date of incorporation registration', 'date of incorporation or registration', 'incorporation registration date'],
+  lei: ['lei no', 'global legal entity identifier', 'lei if applicable'],
+  website: ['company website', 'web address', 'homepage', 'www', 'website address', 'internet site'],
+  email: ['company email', 'general email', 'email address', 'e mail', 'e mail address', 'company e mail'],
+  phone: ['company telephone', 'main phone', 'switchboard', 'tel no', 'telephone no', 'phone no', 'main telephone number', 'office telephone'],
+  reg_street: ['address line 1', 'street address', 'street name and number', 'building and street', 'house number', 'street and house number', 'number and street'],
+  reg_postcode: ['postal zip code', 'zip postal code', 'postcode zip', 'post code zip'],
+  reg_city: ['town city', 'city town', 'municipality', 'city or town'],
+  reg_country: ['country region'],
+  reg_address: ['address of registered office', 'statutory seat', 'official address', 'legal address', 'registered business address', 'domicile address', 'registered office address including country', 'registered address full', 'address registered office', 'permanent residence address entity', 'address of incorporation'],
+  op_address: ['head office', 'head office address', 'headquarters', 'headquarters address', 'principal office', 'principal office address', 'office address', 'place of business', 'address of principal place of business', 'physical address', 'business premises', 'main business address', 'principal operating address', 'operating address if different', 'business address if different', 'address of head office', 'mailing address if different'],
+  tax_country: ['tax domicile', 'resident for tax purposes in', 'tax resident in', 'tax jurisdiction', 'country of tax residency', 'jurisdiction of residence for tax purposes', 'country jurisdiction of tax residence', 'jurisdiction of tax residency'],
+  tin: ['taxpayer identification number', 'tax reference number', 'tax registration number', 'tax code', 'fiscal identification number', 'national tax number', 'us tin', 'ein', 'employer identification number', 'foreign tin', 'foreign taxpayer identification number', 'tin or functional equivalent', 'tax identification no'],
+  vat: ['vat no', 'vat identification number', 'sales tax number', 'gst number', 'vat reg no'],
+  fatca_status: ['fatca entity classification', 'fatca entity type', 'chapter 4 classification', 'fatca category', 'chapter 4 fatca status', 'fatca status of the entity', 'fatca classification of the entity'],
+  giin: ['giin number', 'giin if applicable', 'global intermediary identification number giin'],
+  crs_status: ['crs entity type', 'crs entity classification', 'common reporting standard classification', 'crs category', 'oecd crs classification', 'crs status of the entity', 'entity type for crs purposes'],
+  us_person: ['united states person', 'us citizen or resident', 'are you a us person', 'is the entity a us person', 'us tax resident', 'u s entity'],
+  regulated: ['is the entity regulated', 'licensed by', 'authorised by', 'authorized by', 'subject to regulatory supervision', 'regulatory status', 'regulated status', 'prudentially regulated', 'regulated or supervised', 'regulated institution', 'is the company regulated', 'regulated by a financial regulator'],
+  regulator: ['regulatory body', 'primary regulator', 'name of supervisory authority', 'licensing authority', 'name of the regulator', 'regulated by which authority', 'name of regulatory authority', 'financial regulator'],
+  licence_number: ['licence no', 'license no', 'regulatory reference', 'regulatory registration number', 'firm reference number', 'authorisation number', 'authorization number', 'regulator reference number', 'licence reference', 'license reference', 'regulatory licence number', 'regulatory license number'],
+  listed: ['listed company', 'listed on a regulated market', 'quoted company', 'is the entity listed', 'stock exchange listed', 'traded on a recognised exchange', 'traded on a recognized exchange', 'publicly quoted', 'shares listed', 'is the company listed'],
+  exchange: ['name of stock exchange', 'listing exchange', 'exchange where listed', 'recognised exchange', 'recognized exchange', 'exchange name'],
+  exchange_memberships: ['clearing members', 'memberships of exchanges', 'markets traded', 'exchanges traded', 'exchange membership', 'trading venue memberships', 'markets accessed'],
+  nature_of_business: ['principal business activity', 'main business activity', 'description of business activities', 'describe the business', 'business description', 'nature and purpose of business', 'primary business', 'line of business', 'business purpose', 'corporate purpose', 'company activities', 'business profile', 'activities of the company', 'what does the company do', 'business activities description', 'description of activities', 'principal activities of the entity', 'nature of the entity s business', 'nature of business activities'],
+  industry: ['industry type', 'industry of operation', 'business industry'],
+  industry_code: ['naics code', 'industry classification code', 'activity code', 'standard industrial classification', 'nace rev 2 code', 'sic nace code'],
+  countries_of_operation: ['countries where the company operates', 'geographic footprint', 'jurisdictions where business is conducted', 'main countries of business', 'countries in which you operate', 'geographical scope', 'where does the company do business', 'countries of business activity', 'jurisdictions of operation', 'geographic presence', 'countries where you do business', 'regions of operation'],
+  employees: ['number of staff', 'employee count', 'full time employees', 'staff numbers', 'total employees', 'number of personnel'],
+  turnover: ['sales', 'annual sales', 'total revenue', 'last year revenue', 'annual turnover last financial year', 'net turnover'],
+  total_assets: ['total balance sheet', 'total assets last financial year'],
+  equity: ['own funds', 'total equity', 'net worth'],
+  source_of_funds: ['where do the funds come from', 'source of incoming funds', 'funds origin', 'origin of the funds', 'source of funds for the account', 'source of funds used'],
+  source_of_wealth: ['how was the wealth generated', 'wealth origin', 'source of capital', 'origin of the wealth', 'source of the entity s wealth'],
+  purpose: ['intended nature of the relationship', 'reason for the relationship', 'reason for opening the account', 'intended purpose', 'purpose of account opening', 'nature and purpose of the relationship', 'intended use of the account', 'purpose of the account relationship', 'reason for establishing the relationship', 'anticipated use of services', 'services required', 'products and services required'],
+  expected_activity: ['expected transaction volume', 'expected monthly volume', 'expected annual volume', 'expected turnover through the account', 'estimated volume', 'projected activity', 'expected trading volume', 'expected account activity', 'anticipated account activity', 'expected value of transactions', 'expected frequency of transactions'],
+  bank_name: ['name of the bank', 'banking institution', 'bank institution', 'name of bank'],
+  iban: ['iban number', 'account no', 'international bank account number', 'bank account no'],
+  bic: ['bic swift', 'swift bic code', 'swift address', 'bic swift code'],
+  account_holder: ['account holder name', 'name on the account', 'beneficiary account name', 'account title'],
+  sanctions_exposure: ['sanctioned jurisdictions', 'sanctions exposure', 'business with sanctioned', 'dealings with sanctioned', 'comprehensively sanctioned', 'sanctioned territories', 'sanctions nexus', 'activities in sanctioned countries', 'ties to sanctioned countries', 'subject to any sanctions'],
+  pep_any: ['any pep', 'political exposure', 'close associate of a pep', 'family member of a pep', 'peps involved', 'are any directors or beneficial owners peps', 'pep involvement'],
+  aml_policy: ['aml programme', 'anti money laundering policy', 'aml cft policy', 'aml ctf policy', 'compliance programme', 'compliance program', 'aml procedures', 'money laundering policies', 'aml cft programme', 'anti money laundering programme', 'anti money laundering program', 'financial crime policy'],
+  bearer_shares: ['issued bearer shares', 'bearer instruments', 'bearer share warrants'],
+  shell_bank: ['shell banks', 'relationships with shell banks', 'services to shell banks'],
+  nominee: ['nominee shareholders', 'nominee directors', 'nominee arrangements', 'nominee shareholdings'],
+  contact_name: ['main contact', 'point of contact', 'relationship contact', 'authorised contact', 'authorized contact', 'contact person name', 'name of contact person'],
+  contact_title: ['contact job title', 'position of contact', 'contact person position', 'contact person title'],
+  contact_email: ['email of contact person', 'contact e mail', 'contact person email', 'contact person e mail'],
+  contact_phone: ['phone of contact person', 'contact number', 'contact person phone', 'contact person telephone'],
+  today: ['signature date', 'date of declaration', 'declaration date', 'date of completion', 'completion date', 'date completed', 'date of signing'],
+};
+const PMORE = {
+  full_name: ['full legal name', 'name of individual', 'individual name', 'person name', 'name in full', 'full name as per passport', 'complete name', 'name as shown on id', 'name and surname', 'full names'],
+  first_name: ['christian name', 'first and middle names'],
+  last_name: ['last names', 'surname family name'],
+  position: ['designation', 'position held', 'office held', 'title position', 'role in the company', 'position in the company', 'function in the company'],
+  date_of_birth: ['birthdate', 'date born', 'date of birth dd mm yyyy'],
+  place_of_birth: ['birthplace', 'town city of birth'],
+  country_of_birth: ['birth country'],
+  nationality: ['country of citizenship', 'nationalities', 'nationality ies', 'nationality s', 'citizen of', 'citizenship s'],
+  res_address: ['address of residence', 'residence address', 'current residential address', 'usual residential address', 'full residential address', 'residential address including country', 'home address including country'],
+  res_country: ['country of domicile'],
+  ownership_pct: ['percentage of ownership', 'ownership interest', '% owned', '% ownership', 'percentage owned', 'share percentage', '% voting rights', 'economic interest', 'percentage of shares held', '% of ownership', 'ownership %', 'percentage interest', '% interest'],
+  control: ['control exercised', 'means of control', 'nature of ownership', 'direct or indirect', 'type of ownership', 'direct indirect ownership', 'ownership type'],
+  pep: ['is this person a pep', 'pep status', 'pep yes no'],
+  pep_details: ['details of pep status', 'political position', 'prominent public function', 'pep position', 'if pep provide details'],
+  id_type: ['identification type', 'type of identification document', 'id document type', 'identity document type'],
+  id_number: ['id document number', 'national id number', 'identity document number', 'document no', 'passport id number', 'passport id no'],
+  id_country: ['issuing authority', 'issuing state', 'country of issuance', 'place of issue'],
+  id_issued: ['date issued'],
+  id_expiry: ['valid to', 'validity', 'expiry'],
+  phone: ['mobile', 'mobile number', 'contact number', 'telephone number'],
+};
+const ROLE_MORE = {
+  director: ['board members', 'member of the board', 'executive director', 'non executive director', 'directors and officers', 'board of directors members', 'members of the board', 'management board members'],
+  ubo: ['person with significant control', 'persons with significant control', 'psc', 'ultimate owner', 'ultimate controller', 'beneficial ownership', 'ultimate beneficial ownership', 'controlling persons'],
+  signatory: ['person authorised to sign', 'person authorized to sign', 'attorney', 'power of attorney holder', 'legal representative', 'authorised officer', 'authorized officer', 'authorised signatories list', 'name of signatory'],
+  member: ['cooperative member', 'member of the cooperative', 'members of the cooperative'],
+  shareholder: ['parent', 'holding company', 'immediate parent', 'direct shareholder', 'legal owner', 'equity holder', 'shareholding structure', 'stockholders'],
+};
+
 export const DOC_TYPES = [
   ['kvk_extract', 'Trade register extract (KvK uittreksel)', 90],
   ['articles', 'Articles of association (statuten)', 0],
@@ -176,3 +267,8 @@ export function newProfile() {
 export function newEntity(name) {
   return { id: crypto.randomUUID(), name, values: { legal_name: { v: name, at: new Date().toISOString().slice(0, 10), hist: [] } }, custom: [], people: [], docs: [] };
 }
+
+// Merge the extra wording. Person and company items share names in places (email, phone, tin…);
+// each list gets the extras for its own key.
+for (const [list, more] of [[ENTITY_KEYS, MORE], [SPECIAL_KEYS, MORE], [PERSON_KEYS, PMORE]]) for (const d of list) if (more[d.key]) d.aliases = [...new Set([...d.aliases, ...more[d.key]])];
+for (const r of ROLES) if (ROLE_MORE[r.role]) r.aliases = [...new Set([...r.aliases, ...ROLE_MORE[r.role]])];
