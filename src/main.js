@@ -1017,8 +1017,14 @@ function renderAll() { setDocMode(); renderThumbs(); layoutView(); renderTabs();
 
 // ---------------------------------------------------------------- commands & keys
 async function doOpen() { const e = await host.pickOpen(); if (e.length) openEntries(e); }
+/** Close the document and go back to the start screen. Asks first if there are unsaved changes. */
+async function closeDoc() {
+  if (!S.pages.length) return;
+  if (!(await confirmDiscard('closing it'))) return;
+  resetWorkspace(); setTool('select'); renderAll();
+}
 async function doInsert() { if (!S.pages.length) return doOpen(); const e = await host.pickOpen(); if (e.length) insertEntries(e); }
-$('#bOpen').onclick = doOpen; $('#bInsert').onclick = doInsert;
+$('#bOpen').onclick = doOpen; $('#bClose').onclick = closeDoc; $('#bInsert').onclick = doInsert;
 $('#bSave').onclick = () => save(false); $('#bSaveAs').onclick = () => save(true);
 $('#bUndo').onclick = undo; $('#bRedo').onclick = redo;
 $('#bProfile').onclick = () => openProfile();
@@ -1070,6 +1076,7 @@ document.addEventListener('keydown', e => {
   const mod = e.ctrlKey || e.metaKey, k = e.key.toLowerCase();
   if (mod) {
     if (k === 'o') { e.preventDefault(); doOpen(); return; }
+    if (k === 'w') { e.preventDefault(); closeDoc(); return; }
     if (k === 'i') { e.preventDefault(); doInsert(); return; }
     if (k === 's') { e.preventDefault(); save(e.shiftKey); return; }
     if (k === '=' || k === '+') { e.preventDefault(); zoomStep(1); return; }
