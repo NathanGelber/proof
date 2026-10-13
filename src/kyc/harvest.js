@@ -118,7 +118,7 @@ export async function harvestForm(ent) {
   try { answers = isOfficeName(f.name) ? await readAnswers(f.bytes, f.name) : await pdfAnswers(f.bytes); }
   catch (e) { b.done(); C.toast('Couldn’t read that form: ' + (e?.message || e), 8000); return; }
   b.done();
-  if (!answers.length) { C.toast(`No answers found in ${f.name}. Proof reads filled form fields, label: answer lines, tables and ticked boxes.`, 8000); return; }
+  if (!answers.length) { C.toast(`No answers found in ${f.name}.`, 8000); return; }
 
   // Match labels to items, on this computer first, then Claude for the rest (labels only, never the answers).
   const props = new Map(localFields(ent, answers).map(p => [p.id, p]));
@@ -130,7 +130,7 @@ export async function harvestForm(ent) {
     // Hand Claude copies without the answers, so nothing written in the form can travel.
     const bare = open.map(({ value, ...rest }) => rest);
     try { const { matches } = await claudeMatch(ent, { fields: bare, avoid: [] }); for (const m of matches) if (m.key && m.confidence !== 'low') props.set(m.id, m); usedClaude = true; }
-    catch (e) { C.toast('Claude matching failed; showing what Proof matched itself. ' + errMsg(e), 7000); }
+    catch (e) { C.toast('Claude matching failed: ' + errMsg(e), 7000); }
     finally { bb.done(); }
   }
 
@@ -184,7 +184,7 @@ function review(ent, fileName, rows, usedClaude) {
     tally();
   };
   const tally = () => { const n = rows.filter(r => r.include).length; count.textContent = `${rows.length} answers found · ${n} to add`; add.textContent = n ? `Add ${n} to the profile` : 'Add'; add.disabled = !n; };
-  const m = modal('Build your profile', h('p', { class: 'hint' }, `From ${fileName}, as ${ent.name}. ${usedClaude ? 'Labels Proof didn’t know were matched by Claude (labels only; the answers never left this computer). ' : ''}Ticked answers are added; anything that would replace a value you already have starts unticked. Every value keeps its history.`), list, dl,
+  const m = modal('Import answers', h('p', { class: 'hint' }, `${fileName} → ${ent.name}${usedClaude ? ' · some labels matched by Claude' : ''}`), list, dl,
     h('div', { class: 'rv-foot' }, count), h('div', { class: 'actions' }, h('button', { class: 'btn quiet', onclick: () => m.close() }, 'Cancel'), add));
   m.modal.classList.add('wide');
   draw();

@@ -481,13 +481,8 @@ function setTool(t) {
   if (S.itab === 'page' && !S.selItem) renderInsp();
 }
 const TOOL_HINT = {
-  select: 'Click something you added to select it. Drag to move, drag the blue square to resize, arrow keys nudge.',
-  text: 'Click the page where the text should start, then type in the inspector.',
-  date: `Click the page to stamp today’s date (${today()}).`,
-  cover: 'Click to place a box that hides what’s under it. The covered text stays in the file; use Redact to remove it.',
-  redact: 'Click to place a redaction, then resize it over what should go. When you save, everything underneath (text, images) is removed and a black box is left in its place.',
-  image: 'Choose a PNG or JPG. It lands in the middle of the visible page.',
-  sign: 'Draw, type, or reuse your saved signature. It lands in the middle of the visible page.',
+  cover: 'Hides content visually. The text stays in the file.',
+  redact: 'Content under the box is permanently removed on save.',
 };
 $('#tools').addEventListener('click', e => { const t = e.target.closest('button')?.dataset.t; if (t) useTool(t); });
 async function useTool(t) {
@@ -673,7 +668,7 @@ function collatePages(revBacks) {
   renderAll(); toast(`Collated ${idx.length} pages: ${f} fronts, ${list.length - f} backs.`);
 }
 function removeDoc(d) {
-  if (S.pages.every(p => p.doc === d)) { toast('That’s the only file. Use Open to start over.'); return; }
+  if (S.pages.every(p => p.doc === d)) { toast('That’s the only file.'); return; }
   commit(); S.pages = S.pages.filter(p => p.doc !== d); for (const u of [...S.sel]) if (!byUid(u)) S.sel.delete(u);
   if (!byUid(S.cur)) S.cur = S.pages[0].uid; if (S.selItem && !byUid(S.selItem.uid)) S.selItem = null;
   renderAll();
@@ -736,7 +731,7 @@ function paperName(wmm, hmm) { const [a, b] = [Math.min(wmm, hmm), Math.max(wmm,
 
 function renderInsp() {
   const body = $('#ibody'); const top = body.scrollTop; body.replaceChildren();
-  if (!S.pages.length) { body.append(sec(null, h('p', { class: 'hint' }, 'Open a PDF to see its pages, form fields and settings here.'))); return; }
+  if (!S.pages.length) { body.append(sec(null, h('p', { class: 'hint' }, 'No document open.'))); return; }
   ({ page: inspPage, form: inspForm, stamps: inspStamps, doc: inspDoc })[S.itab](body);
   body.scrollTop = top;
 }
@@ -758,11 +753,11 @@ function inspPage(body) {
           h('div', { class: 'fld' }, h('span', { class: 'lbl' }, 'Color'), swatchRow(it.color, [['#111111', 'Black'], ['#1F3FBF', 'Blue'], ['#C0172F', 'Red']], recolor))));
     } else if (it.type === 'rect') {
       s.append(h('div', { class: 'fld' }, h('span', { class: 'lbl' }, 'Fill'), swatchRow(it.color, [['#000000', 'Black'], ['#FFFFFF', 'White']], recolor)),
-        h('p', { class: 'hint' }, 'A cover box hides what’s under it, but the text is still in the file and can be copied out. Use Redact to remove it.'),
+        h('p', { class: 'hint' }, 'Hides content visually. The text stays in the file; use Redact to remove it.'),
         h('div', { class: 'btns' }, h('button', { class: 'btn', onclick: () => { commit(); it.type = 'redact'; delete it.color; redraw(); renderInsp(); } }, 'Make it a redaction')));
     } else if (it.type === 'redact') {
-      s.append(h('p', { class: 'hint' }, 'When you save, everything under this box is removed from the file: text, images and form fields. A black box is left in its place. Undo can’t bring it back once saved.'));
-    } else s.append(h('p', { class: 'hint' }, 'Drag to move. Drag the blue square to resize; proportions stay fixed.'));
+      s.append(h('p', { class: 'hint' }, 'Content under the box is permanently removed on save.'));
+    }
     s.append(h('div', { class: 'btns' }, h('button', { class: 'btn danger', onclick: deleteItem }, 'Delete'), h('button', { class: 'btn quiet', onclick: () => selectItem(null, null) }, 'Done')));
     body.append(s); return;
   }
@@ -770,7 +765,6 @@ function inspPage(body) {
   if (multi) {
     const list = targetPages();
     body.append(sec(`${list.length} pages`,
-      h('p', { class: 'hint' }, 'Selected in the sidebar. Ctrl+click adds or removes a page, Shift+click selects a range.'),
       h('div', { class: 'btns' },
         h('button', { class: 'btn', onclick: () => rotatePages(list, -90) }, 'Rotate left'), h('button', { class: 'btn', onclick: () => rotatePages(list, 90) }, 'Rotate right'),
         h('button', { class: 'btn', onclick: exportSelected }, 'Extract…'), h('button', { class: 'btn danger', onclick: () => deletePages(list) }, 'Delete')),
@@ -788,7 +782,7 @@ function inspPage(body) {
         h('button', { class: 'btn', onclick: () => insertBlank(p.uid) }, 'Blank after'), h('button', { class: 'btn danger', onclick: () => deletePages([p]) }, 'Delete'))));
   }
   const toolName = $(`#tools [data-t="${S.tool}"]`).firstChild.textContent;
-  body.append(sec(toolName, h('p', { class: 'hint' }, TOOL_HINT[S.tool])));
+  if (TOOL_HINT[S.tool]) body.append(sec(toolName, h('p', { class: 'hint' }, TOOL_HINT[S.tool])));
 }
 function inspForm(body) {
   const docs = visDocs().filter(d => !d.hidden); const any = docs.some(d => d.fields.length);
@@ -798,14 +792,13 @@ function inspForm(body) {
   const flat = h('input', { type: 'checkbox', id: 'f-flat', checked: S.opts.flatten });
   flat.onchange = () => { S.opts.flatten = flat.checked; markDirty(); };
   out.append(sec('Answers',
-    h('p', { class: 'hint' }, 'Answers show on the pages straight away and are written into the file when you save.'),
     h('div', { class: 'btns' }, h('button', { class: 'btn', disabled: !any, onclick: loadAnswers }, 'Load answers…'), h('button', { class: 'btn', disabled: !any, onclick: saveAnswers }, 'Save answers…')),
-    any ? h('label', { class: 'opt', for: 'f-flat' }, flat, h('div', {}, 'Flatten when saving', h('small', {}, 'Makes answers permanent page content. Combined files and redacted documents are always flattened.'))) : null));
+    any ? h('label', { class: 'opt', for: 'f-flat' }, flat, h('div', {}, 'Flatten when saving', h('small', {}, 'Combined and redacted files are always flattened.'))) : null));
   for (const d of docs) {
     const s = sec(null, h('div', { class: 'file' }, h('i', { style: `background:var(${d.color})` }), h('b', { class: 'nm' }, d.name), h('span', { class: 'pp' }, `${d.fields.length} fields`)));
-    if (!d.fields.length) s.append(h('p', { class: 'hint' }, d.xfa ? 'XFA form with no standard fields. Use Fill from profile, or the Text tool.' : 'No fillable fields. Use Fill from profile, or the Text tool to type on the page.'));
+    if (!d.fields.length) s.append(h('p', { class: 'hint' }, d.xfa ? 'XFA form with no standard fields.' : 'No fillable fields.'));
     else {
-      if (d.xfa) s.append(h('p', { class: 'hint' }, 'XFA (LiveCycle) form. Proof fills its standard fields and removes the XFA layer on save, so every reader shows your answers.'));
+      if (d.xfa) s.append(h('p', { class: 'hint' }, 'XFA form. The XFA layer is removed on save.'));
       d.fields.forEach((f, i) => {
         const cur = f.name in d.values ? d.values[f.name] : f.value; const fid = `f-${d.id}-${i}`;
         const row = h('div', { class: 'frow' + (f.name in d.values ? ' changed' : '') });
@@ -845,7 +838,7 @@ async function loadAnswers() {
     if (!entry) return;
   }
   let data; try { data = JSON.parse(new TextDecoder().decode(entry.bytes)); } catch { toast('That file isn’t valid JSON.'); return; }
-  const src = data?.fields; if (!src || typeof src !== 'object') { toast('No answers in that file. It should come from Save answers.'); return; }
+  const src = data?.fields; if (!src || typeof src !== 'object') { toast('No answers in that file.'); return; }
   commit(); let n = 0;
   for (const d of visDocs()) for (const f of d.fields) {
     if (!(f.name in src) || f.ro) continue; let v = src[f.name];
@@ -866,11 +859,11 @@ function inspStamps(body) {
   const bOn = h('input', { type: 'checkbox', id: 'st-b', checked: st.bates.on }); bind(bOn, el => (st.bates.on = el.checked));
   const wmO = h('select', { id: 'st-wo', 'aria-label': 'Strength' }, [[0.08, 'Faint'], [0.15, 'Light'], [0.3, 'Strong']].map(([k, l]) => h('option', { value: k }, l))); wmO.value = String(st.wm.opacity); bind(wmO, el => (st.wm.opacity = +el.value));
   body.append(
-    sec('Stamps', h('p', { class: 'hint' }, 'Printed on every saved page, numbered in saved order, and previewed on the pages now. Header and footer can use {page}, {pages} and {date}.')),
+    sec('Stamps', h('p', { class: 'hint' }, 'Header and footer accept {page}, {pages} and {date}.')),
     sec(null, h('label', { class: 'lbl', for: 'st-h' }, 'Header'), txt('st-h', st.header, 'text', 'Confidential · {date}'), slotSel('st-hs', st.header)),
     sec(null, h('label', { class: 'lbl', for: 'st-f' }, 'Footer'), txt('st-f', st.footer, 'text', 'Case 2026-114'), slotSel('st-fs', st.footer)),
     sec(null, h('label', { class: 'lbl', for: 'st-n' }, 'Page numbers'), h('div', { class: 'fline' }, nf, h('span', { class: 'lbl' }, 'from'), numIn('st-n0', st.num, 'start', 1, 0, 'Start at')), slotSel('st-ns', st.num)),
-    sec(null, h('label', { class: 'opt', for: 'st-b' }, bOn, h('div', {}, 'Bates numbers', h('small', {}, 'Prefix plus a zero-padded running number, e.g. ACME000041.'))),
+    sec(null, h('label', { class: 'opt', for: 'st-b' }, bOn, h('div', {}, 'Bates numbers', h('small', {}, 'Prefix + zero-padded number'))),
       h('div', { class: 'fline' }, txt('st-bp', st.bates, 'prefix', 'Prefix')),
       h('div', { class: 'fline' }, h('span', { class: 'lbl' }, 'from'), numIn('st-b0', st.bates, 'start', 1, 0, 'Start at'), h('span', { class: 'lbl' }, 'digits'), numIn('st-bd', st.bates, 'digits', 6, 1, 'Digits')),
       slotSel('st-bs', st.bates)),
@@ -889,8 +882,8 @@ function inspDoc(body) {
   body.append(sec('Arrange',
     h('p', { class: 'hint' }, `Applies to ${scope}.`),
     h('div', { class: 'btns' }, h('button', { class: 'btn', disabled: S.pages.length < 2, onclick: reversePages }, 'Reverse order')),
-    h('p', { class: 'hint' }, 'Collate scan: for a double-sided document scanned one side at a time, all fronts then all backs. Weaves them back into 1, 2, 3, 4…'),
-    h('label', { class: 'opt', for: 'd-rev' }, rev, h('div', {}, 'Backs are in reverse order', h('small', {}, 'The usual case: you flipped the stack.'))),
+    h('p', { class: 'hint' }, 'Interleave fronts and backs from a one-sided scan.'),
+    h('label', { class: 'opt', for: 'd-rev' }, rev, h('div', {}, 'Backs are in reverse order')),
     h('div', { class: 'btns' }, h('button', { class: 'btn', disabled: S.pages.length < 2, onclick: () => collatePages(rev.checked) }, 'Collate scan'))));
   const strip = h('input', { type: 'checkbox', id: 'd-strip', checked: S.opts.strip }); strip.onchange = () => { S.opts.strip = strip.checked; markDirty(); };
   const comp = h('input', { type: 'checkbox', id: 'd-comp', checked: S.opts.compress }); comp.onchange = () => { S.opts.compress = comp.checked; markDirty(); };
@@ -903,10 +896,10 @@ function inspDoc(body) {
   });
   body.append(sec('When saving',
     h('label', { class: 'opt', for: 'd-strip' }, strip, h('div', {}, 'Strip metadata', h('small', {}, 'Removes author, title, creator software, dates and the XMP block.'))),
-    h('label', { class: 'opt', for: 'd-comp' }, comp, h('div', {}, 'Compress', h('small', {}, 'Removes unused objects and duplicates, and compresses everything. Images keep their quality.'))),
+    h('label', { class: 'opt', for: 'd-comp' }, comp, h('div', {}, 'Compress', h('small', {}, 'Lossless.'))),
     h('label', { class: 'fld', for: 'd-pw' }, h('span', { class: 'lbl' }, 'Password to open'), pw),
     h('label', { class: 'opt', for: 'd-show' }, show, h('div', {}, 'Show password')), msg,
-    h('p', { class: 'hint' }, 'AES-256. Anyone opening the saved file will need this password. Leave empty for none.')));
+    h('p', { class: 'hint' }, 'AES-256. Leave empty for none.')));
 }
 
 // ---------------------------------------------------------------- signature
@@ -985,11 +978,9 @@ function renderEmpty() {
   const recent = host.isDesktop ? host.recentFiles() : [];
   $('#empty').replaceChildren(h('div', { class: 'box' },
     h('h1', { class: 'mark' }, 'Proof'),
-    h('p', {}, 'Combine, reorder and rotate pages. Type, sign and stamp on them, fill forms, redact for real, number and password-protect. Everything stays on this computer.'),
     h('div', { class: 'acts' },
       h('button', { class: 'btn primary', onclick: doOpen }, 'Open a PDF')),
-    h('p', { class: 'lbl' }, 'Or drop PDFs and images anywhere in this window.'),
-    h('p', {}, 'Filling a KYC or due-diligence form? ', h('button', { class: 'lnk', onclick: () => setMode('kyc') }, 'Use the KYC tab'), '.'),
+    h('p', { class: 'lbl' }, 'Or drop files here'),
     recent.length ? h('div', { class: 'fld' }, h('span', { class: 'lbl' }, 'Recent'),
       h('div', { class: 'recent' }, recent.map(p => h('button', { title: p, onclick: () => openPaths([p], 'open') }, h('b', {}, host.baseName(p)), h('span', {}, host.dirName(p)))))) : null));
 }

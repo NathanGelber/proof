@@ -33,7 +33,7 @@ export function setCurEntity(id) { try { localStorage.setItem(LS_ENT, id); } cat
 export function initKyc(ctx) {
   C = ctx;
   setSaveErrorHandler(async e => {
-    if (errKind(e) === 'LOCKED') { afterLock(); C.renderInsp(); C.toast('The profile locked itself. Unlock it to keep going; your last change wasn’t saved.', 7000); return; }
+    if (errKind(e) === 'LOCKED') { afterLock(); C.renderInsp(); C.toast('Profile locked. Last change not saved.', 7000); return; }
     if (errKind(e) === 'CONFLICT') return conflict();
     C.toast('Couldn’t save the profile: ' + errMsg(e), 8000);
   });
@@ -92,17 +92,16 @@ function setupDialog(info) {
   const { h, modal } = C;
   return new Promise(resolve => {
     let path = null;
-    const name = h('input', { type: 'text', id: 'kyc-ent', placeholder: 'Legal name of the first entity' });
+    const name = h('input', { type: 'text', id: 'kyc-ent', });
     const p1 = h('input', { type: 'password', id: 'kyc-p1', autocomplete: 'new-password' }), p2 = h('input', { type: 'password', id: 'kyc-p2', autocomplete: 'new-password' });
     const where = h('p', { class: 'hint' }, info.path);
     const msg = h('p', { class: 'msg', role: 'alert' });
     const go = h('button', { class: 'btn primary', onclick: ok }, 'Create profile');
     const m = modal('Set up your profile',
-      h('p', {}, 'One encrypted file holds your entities, people, documents and the record of what you sent. Only this passphrase opens it.'),
       h('label', { class: 'fld', for: 'kyc-ent' }, h('span', { class: 'lbl' }, 'First entity'), name),
       h('label', { class: 'fld', for: 'kyc-p1' }, h('span', { class: 'lbl' }, 'Passphrase (12+ characters)'), p1),
       h('label', { class: 'fld', for: 'kyc-p2' }, h('span', { class: 'lbl' }, 'Same again'), p2),
-      h('p', { class: 'hint' }, 'There is no way to recover a forgotten passphrase. Store it in your password manager.'),
+      h('p', { class: 'hint' }, 'A forgotten passphrase can’t be recovered.'),
       h('div', { class: 'fld' }, h('span', { class: 'lbl' }, 'Saved at'), where,
         host.isDesktop ? h('div', { class: 'btns' },
           h('button', { class: 'btn quiet', onclick: async () => { const p = await host.pickSave(info.path, { name: 'Proof profile', ext: 'vault' }); if (p) { path = p; where.textContent = p; } } }, 'Choose location…'),
@@ -199,19 +198,15 @@ function homeView(ent) {
   const recent = K.P.log.filter(l => l.entity === ent?.id).slice(0, 6);
   const filled = ent ? entityKeys(ent).filter(d => rawValue(ent, d.key)).length : 0;
   const drop = h('div', { class: 'kdrop', role: 'button', tabindex: '0', onclick: () => fillNow(true), onkeydown: e => { if (e.key === 'Enter') fillNow(true); } },
-    h('b', {}, 'Open a form to fill'), h('span', {}, 'PDF, Word or Excel. Or drop it anywhere in this window.'));
+    h('b', {}, 'Open a form to fill'), h('span', {}, 'PDF, Word or Excel'));
   return h('section', { class: 'kblock' },
     h('h2', {}, 'Fill a form'),
-    h('p', { class: 'hint' }, `As ${ent?.name || '—'}. Proof fills what it knows straight onto the form, and lists only what needs you.`),
     drop,
-    doc ? h('div', { class: 'kcard' }, h('div', {}, h('b', {}, doc.name), h('small', {}, 'Open in the PDF tab')), h('button', { class: 'btn primary', onclick: () => fillNow(false) }, 'Fill this one')) : null,
-    h('div', { class: 'kblock2' }, h('h3', {}, 'Build your profile from a form you’ve filled before'),
-      h('p', { class: 'hint' }, filled < 8
-        ? 'The quickest way to start: open a form you already sent to a bank. Proof reads its answers, matches them to profile items, and shows you each one before anything is saved.'
-        : 'Pick up answers from another filled form. You see each one, and what it would replace, before anything is saved.'),
-      h('div', { class: 'btns' }, h('button', { class: filled < 8 ? 'btn primary' : 'btn', onclick: () => harvestForm(ent) }, 'Choose a filled form…'))),
+    doc ? h('div', { class: 'kcard' }, h('div', {}, h('b', {}, doc.name)), h('button', { class: 'btn primary', onclick: () => fillNow(false) }, 'Fill')) : null,
+    h('div', { class: 'kblock2' }, h('h3', {}, 'Import from a filled form'),
+      h('div', { class: 'btns' }, h('button', { class: filled < 8 ? 'btn primary' : 'btn', onclick: () => harvestForm(ent) }, 'Choose file…'))),
     recent.length ? h('div', { class: 'kblock2' }, h('h3', {}, 'Recently filled'),
-      h('div', { class: 'krecent' }, recent.map(l => h('div', {}, h('b', {}, l.counterparty || 'Unnamed counterparty'), h('span', {}, `${l.file} · ${fmtDate(l.at.slice(0, 10))} · ${l.fields.length} answers`)))),
+      h('div', { class: 'krecent' }, recent.map(l => h('div', {}, h('b', {}, l.counterparty || '—'), h('span', {}, `${l.file} · ${fmtDate(l.at.slice(0, 10))} · ${l.fields.length} answers`)))),
       h('div', { class: 'btns' }, h('button', { class: 'btn quiet', onclick: () => { view.sec = 'log'; renderKyc(); } }, 'Full record'))) : null);
 }
 
@@ -251,12 +246,10 @@ function setupCard() {
   requestAnimationFrame(() => name.focus());
   return h('section', { class: 'kblock kgate' },
     h('h2', {}, 'Set up KYC'),
-    h('p', {}, 'Proof keeps your KYC answers in one encrypted profile: your entities, the people behind them, your documents, and a record of what you sent to whom. Forms are then filled from it.'),
-    h('ol', { class: 'ksteps' }, h('li', {}, 'Name your first entity and pick a passphrase.'), h('li', {}, 'Build the profile from a form you’ve already filled, or type it in.'), h('li', {}, 'Open a counterparty’s form and fill it.')),
     h('label', { class: 'fld', for: 'ks-ent' }, h('span', { class: 'lbl' }, 'Legal name of the entity'), name),
     h('label', { class: 'fld', for: 'ks-p1' }, h('span', { class: 'lbl' }, 'Passphrase (12+ characters)'), p1),
     h('label', { class: 'fld', for: 'ks-p2' }, h('span', { class: 'lbl' }, 'Same again'), p2),
-    h('p', { class: 'hint' }, 'There’s no way to recover a forgotten passphrase. Keep it in your password manager.'),
+    h('p', { class: 'hint' }, 'A forgotten passphrase can’t be recovered.'),
     h('div', { class: 'fld' }, h('span', { class: 'lbl' }, 'Saved at'), where,
       host.isDesktop ? h('div', { class: 'btns' },
         h('button', { class: 'btn quiet', onclick: async () => { const p = await host.pickSave(K.info?.path, { name: 'Proof profile', ext: 'vault' }); if (p) { path = p; where.textContent = p; } } }, 'Choose location…'),
@@ -328,7 +321,7 @@ function groupEditor(ent, g) {
   const wrap = h('div', { class: 'kgrid' });
   const draw = () => wrap.replaceChildren(...defs.map(d => editor(ent.values, d, ent, () => { if (d.key === 'legal_name' && ent.values.legal_name?.v) { ent.name = ent.values.legal_name.v; persist(); } if (/^(reg|op)_/.test(d.key)) draw(); })));
   draw();
-  return h('section', { class: 'kblock' }, h('h2', {}, title), g === 'identity' ? h('p', { class: 'hint' }, 'Every value keeps its history: when you change something, the old value and its dates stay on record.') : null, wrap);
+  return h('section', { class: 'kblock' }, h('h2', {}, title), wrap);
 }
 
 // ---- people
@@ -358,9 +351,9 @@ function peopleView(ent) {
   function move(arr, i, d) { const a = arr[i], b = arr[i + d]; arr.forEach((p, k) => (p.order = k)); [a.order, b.order] = [b.order, a.order]; persist(); drawPanel(); }
   const add = kind => { const p = { id: crypto.randomUUID(), kind, roles: [], values: {}, order: ent.people.length, since: todayIso() }; ent.people.push(p); persist(); view.person = p.id; drawPanel(); };
   return h('section', { class: 'kblock' }, h('h2', {}, 'People'),
-    h('p', { class: 'hint' }, 'Directors, owners, signatories and members, people or companies. The order here is the numbering forms use: the first UBO listed is “UBO 1”.'),
+    h('p', { class: 'hint' }, 'Order sets numbering on forms (UBO 1, UBO 2…).'),
     h('div', { class: 'btns' }, h('button', { class: 'btn', onclick: () => add('person') }, 'Add a person'), h('button', { class: 'btn', onclick: () => add('company') }, 'Add a company')),
-    h('div', { class: 'kplist' }, cur.length ? cur.map(row) : h('p', { class: 'hint' }, 'Nobody yet.')),
+    h('div', { class: 'kplist' }, cur.length ? cur.map(row) : h('p', { class: 'hint' }, 'None')),
     past.length ? h('details', { class: 'kpast' }, h('summary', {}, `${past.length} no longer involved`), h('div', { class: 'kplist' }, past.map(row))) : null);
 }
 
@@ -384,7 +377,6 @@ function personEditor(ent, p) {
     h('div', { class: 'kblock2' }, h('h3', {}, 'Roles'), roles),
     ...blocks,
     h('div', { class: 'kblock2' }, h('h3', {}, 'Leaving'),
-      h('p', { class: 'hint' }, 'When someone stops being involved, set the date instead of deleting them. Forms stop using them from that day, and the record stays.'),
       h('label', { class: 'fld', for: 'p-until' }, h('span', { class: 'lbl' }, 'Involved until'), until),
       h('div', { class: 'btns' }, h('button', { class: 'btn danger', onclick: () => confirmDo(`Delete ${personName(p)} permanently?`, 'Their values and history go too. The record of what you sent keeps what was sent.', 'Delete', () => { ent.people = ent.people.filter(x => x !== p); persist(); view.person = null; drawPanel(); }) }, 'Delete permanently'))));
 }
@@ -399,13 +391,13 @@ const mimeOf = n => /\.png$/i.test(n) ? 'image/png' : /\.jpe?g$/i.test(n) ? 'ima
 function ageNote(d) {
   const max = docTypeInfo(d.type)[2];
   if (d.expires && d.expires < todayIso()) return { bad: true, text: `Expired ${fmtDate(d.expires)}` };
-  if (d.issued && max && daysSince(d.issued) > max) return { bad: true, text: `Issued ${daysSince(d.issued)} days ago; counterparties usually want one under ${Math.round(max / 30)} months old` };
+  if (d.issued && max && daysSince(d.issued) > max) return { bad: true, text: `Issued ${daysSince(d.issued)} days ago (usual limit ${Math.round(max / 30)} months)` };
   if (d.issued) return { text: `Issued ${daysSince(d.issued)} days ago` };
   return { text: 'Issue date not set' };
 }
 async function addDocs(ent, owner = '') {
   let files = await host.pickOpen({ title: 'Add documents to the profile' }); if (!files.length) return;
-  if (files.some(f => isOfficeName(f.name))) { C.toast('Stored documents are attached to PDFs, so they need to be PDFs or images. Save Word or Excel files as PDF first.', 7000); files = files.filter(f => !isOfficeName(f.name)); if (!files.length) return; }
+  if (files.some(f => isOfficeName(f.name))) { C.toast('Documents must be PDF or image files.', 7000); files = files.filter(f => !isOfficeName(f.name)); if (!files.length) return; }
   const b = C.busy('Encrypting…');
   try {
     for (const f of files) {
@@ -440,7 +432,6 @@ function docsView(ent) {
         h('button', { class: 'btn quiet danger', onclick: () => confirmDo('Delete this document?', `${d.title} is removed from the profile.`, 'Delete', async () => { try { await V.docDelete(d.id); } catch {} ent.docs = ent.docs.filter(x => x !== d); persist(); drawPanel(); }) }, 'Delete')));
   });
   return h('section', { class: 'kblock' }, h('h2', {}, 'Documents'),
-    h('p', { class: 'hint' }, 'Stored encrypted next to the profile. Set issue dates so Proof can warn when an extract is too old to send.'),
     h('div', { class: 'btns' }, h('button', { class: 'btn', onclick: () => addDocs(ent) }, 'Add documents…')),
     rows.length ? h('div', { class: 'kdocs' }, rows) : h('p', { class: 'hint' }, 'None yet.'));
 }
@@ -462,7 +453,6 @@ function customView(ent) {
     h('button', { class: 'x', 'aria-label': 'Remove ' + c.label, onclick: () => confirmDo(`Remove “${c.label}”?`, 'Its stored values stay in the file but are no longer shown or used.', 'Remove', () => { ent.custom = ent.custom.filter(x => x !== c); persist(); drawPanel(); }) }, '×')));
   const vals = ent.custom.filter(c => !c.person).map(c => editor(ent.values, { ...c }, ent));
   return h('section', { class: 'kblock' }, h('h2', {}, 'Custom items'),
-    h('p', { class: 'hint' }, 'Anything forms keep asking for that isn’t on the standard list. Entity items are filled in below; person items appear on each person.'),
     h('div', { class: 'kgrid' }, h('label', { class: 'fld', for: 'cu-l' }, h('span', { class: 'lbl' }, 'Name'), label), h('label', { class: 'fld', for: 'cu-k' }, h('span', { class: 'lbl' }, 'Kind'), kind),
       h('label', { class: 'fld', for: 'cu-s' }, h('span', { class: 'lbl' }, 'Belongs to'), scope), h('label', { class: 'fld', for: 'cu-a' }, h('span', { class: 'lbl' }, 'Also called'), aliases)),
     h('div', { class: 'btns' }, h('button', { class: 'btn', onclick: add }, 'Add item')),
@@ -479,20 +469,19 @@ function logView(ent) {
     const t = q.value.toLowerCase().trim();
     const rows = K.P.log.filter(l => l.entity === ent.id && (!t || [l.counterparty, l.file, ...l.fields.map(f => f.value + ' ' + f.label)].join(' ').toLowerCase().includes(t)));
     list.replaceChildren(...(rows.length ? rows.map(l => h('details', {},
-      h('summary', {}, h('b', {}, l.counterparty || 'Unnamed counterparty'), h('span', {}, `${fmtDate(l.at.slice(0, 10))} · ${l.file} · ${l.fields.length} answers`)),
+      h('summary', {}, h('b', {}, l.counterparty || '—'), h('span', {}, `${fmtDate(l.at.slice(0, 10))} · ${l.file} · ${l.fields.length} answers`)),
       h('table', { class: 'ktab' }, h('tr', {}, h('th', {}, 'Field'), h('th', {}, 'Item'), h('th', {}, 'Value')), l.fields.map(f => h('tr', {}, h('td', {}, f.label), h('td', {}, keyLabel(ent, f.key) || f.key), h('td', {}, String(f.value))))),
       h('div', { class: 'btns' }, h('button', { class: 'btn quiet danger', onclick: () => confirmDo('Delete this record?', 'It can’t be brought back.', 'Delete', () => { K.P.log = K.P.log.filter(x => x !== l); persist(); draw(); }) }, 'Delete record'))))
-      : [h('p', { class: 'hint' }, t ? 'Nothing matches.' : 'Nothing yet. Each time you fill a form from the profile, what went into it is recorded here.')]));
+      : [h('p', { class: 'hint' }, t ? 'Nothing matches.' : 'No records')]));
   };
   q.addEventListener('input', draw); draw();
-  return h('section', { class: 'kblock' }, h('h2', {}, 'Fill record'), h('p', { class: 'hint' }, 'Every form you filled from the profile, with the values as they were at the time. Useful when someone asks what you told them last year.'), q, list);
+  return h('section', { class: 'kblock' }, h('h2', {}, 'Fill record'), q, list);
 }
 
 function formsView() {
   const { h } = C;
   const ms = Object.entries(K.P.mappings).sort((a, b) => (b[1].updated || '').localeCompare(a[1].updated || ''));
   return h('section', { class: 'kblock' }, h('h2', {}, 'Saved forms'),
-    h('p', { class: 'hint' }, 'Forms Proof recognises. When the same form comes back, your reviewed answers are reused. Forget one to make Proof match it fresh.'),
     ms.length ? h('div', {}, ms.map(([fp, m]) => h('div', { class: 'file' }, h('span', { class: 'nm', title: m.title }, m.title), h('span', { class: 'pp' }, `${({ flat: 'flat PDF', acro: 'fillable PDF', docx: 'Word', xlsx: 'Excel' })[m.kind] || m.kind} · ${m.kind === 'flat' ? m.entries.length : Object.keys(m.entries).length} answers · ${fmtDate(m.updated)}`),
       h('button', { class: 'x', 'aria-label': 'Forget ' + m.title, onclick: () => { delete K.P.mappings[fp]; persist(); drawPanel(); } }, '×')))) : h('p', { class: 'hint' }, 'None yet.'));
 }
@@ -512,11 +501,10 @@ function libraryView(ent) {
     list.replaceChildren(...(rows.length ? [h('table', { class: 'ktab' }, h('tr', {}, h('th', {}, 'Label on forms'), h('th', {}, 'Profile item'), h('th', {}, 'Used'), h('th', {}, '')),
       rows.slice(0, 500).map(([k, e]) => h('tr', {}, h('td', {}, k), h('td', {}, libItemLabel(ent, e.key) + (e.as ? ` (${e.as})` : '')), h('td', {}, e.seed && !e.n ? 'imported' : String(e.n || 0)),
         h('td', {}, h('button', { class: 'x', 'aria-label': 'Forget ' + k, onclick: () => { delete K.P.library[k]; persist(); draw(); } }, '×')))))]
-      : [h('p', { class: 'hint' }, t ? 'Nothing matches.' : 'Empty. It fills itself as you apply answers, or import forms to start it off.')]));
+      : [h('p', { class: 'hint' }, t ? 'Nothing matches.' : 'No labels')]));
   };
   q.addEventListener('input', draw); draw();
   return h('section', { class: 'kblock' }, h('h2', {}, 'Label library'),
-    h('p', { class: 'hint' }, 'Form wording Proof has learned, and the profile item each label means. It’s checked before anything else, on this computer. Every answer you apply adds its label; a wrong one is fixed by deleting it here.'),
     h('div', { class: 'btns' }, h('button', { class: 'btn', onclick: () => importForms(ent) }, 'Learn from forms…')), q, list);
 }
 
@@ -553,7 +541,7 @@ async function importForms(ent) {
     } catch { failed.push(f.name); }
   }
   b.done();
-  if (!seen.size) { C.toast(failed.length ? `Couldn’t read ${failed.join(', ')}.` : 'Nothing new: every label in these forms is already known.', 7000); return; }
+  if (!seen.size) { C.toast(failed.length ? `Couldn’t read ${failed.join(', ')}.` : 'No new labels.', 7000); return; }
   const items = [...seen.values()];
   const props = new Map(localFields(ent, items.map(x => x.d)).map(p => [p.id, p]));
   const info = await refreshInfo().catch(() => ({}));
@@ -583,7 +571,7 @@ async function importForms(ent) {
     tally();
   };
   const tally = () => { const n = rows.filter(r => r.include && r.key).length; count.textContent = `${rows.length} new labels · ${n} to add`; save.textContent = n ? `Add ${n}` : 'Add'; save.disabled = !n; };
-  const m = modal('Learn from forms', h('p', { class: 'hint' }, `${files.length - failed.length} form${files.length - failed.length > 1 ? 's' : ''} read${failed.length ? `, ${failed.length} couldn’t be read` : ''}. ${usedClaude ? 'Labels Proof didn’t know were matched by Claude (labels only, sanitized). ' : ''}Check the item for each label; untick or clear anything wrong.`), body, dl,
+  const m = modal('Learn from forms', h('p', { class: 'hint' }, `${files.length - failed.length} form${files.length - failed.length > 1 ? 's' : ''} read${failed.length ? `, ${failed.length} couldn’t be read` : ''}. ${usedClaude ? 'Some labels matched by Claude. ' : ''}`), body, dl,
     h('div', { class: 'rv-foot' }, count), h('div', { class: 'actions' }, h('button', { class: 'btn quiet', onclick: () => m.close() }, 'Cancel'), save));
   m.modal.classList.add('wide');
   draw();
@@ -606,20 +594,18 @@ function settingsView() {
   const pmsg = h('p', { class: 'msg', role: 'alert' });
   return h('section', { class: 'kblock' }, h('h2', {}, 'Settings'),
     h('div', { class: 'kblock2' }, h('h3', {}, 'Matching with Claude'),
-      h('p', { class: 'hint' }, 'Proof matches on this computer first: saved forms, then the label library, then its own phrase lists. Claude only sees what’s left, and only the label text of each answer spot (no file name, letterhead, instructions or surrounding lines) plus the names of your profile items, never their values. Before sending, Proof masks emails, web addresses, phone and account numbers, dates and long numbers, and cuts the counterparty’s name and anything matching your profile. Only the Rust side of the app can reach the network; the screen you are looking at can’t.'),
-      h('label', { class: 'opt', for: 'st-use' }, use, h('div', {}, 'Offer Claude matching', h('small', {}, 'Off: matching stays local and you map the rest by hand.'))),
+      h('label', { class: 'opt', for: 'st-use' }, use, h('div', {}, 'Offer Claude matching', h('small', {}, 'Labels only. Profile values are never sent.'))),
       h('label', { class: 'fld', for: 'st-key' }, h('span', { class: 'lbl' }, 'Anthropic API key'), key),
       h('div', { class: 'btns' },
         h('button', { class: 'btn', onclick: async () => { if (!key.value.trim()) return; try { await V.setKey(key.value.trim()); key.value = ''; await refreshInfo(); C.toast('Key stored in Windows Credential Manager.'); drawPanel(); } catch (e) { C.toast(errMsg(e), 7000); } } }, 'Store key'),
         info.has_key ? h('button', { class: 'btn quiet danger', onclick: async () => { await V.setKey(''); await refreshInfo(); drawPanel(); } }, 'Remove key') : null),
-      h('p', { class: 'hint' }, 'The key lives in Windows Credential Manager, not in the profile, and never reaches this screen.'),
       h('label', { class: 'fld', for: 'st-model' }, h('span', { class: 'lbl' }, 'Model'), model)),
-    h('div', { class: 'kblock2' }, h('h3', {}, 'Answers'), h('label', { class: 'fld', for: 'st-df' }, h('span', { class: 'lbl' }, 'Default date format'), df), h('p', { class: 'hint' }, 'Used when a form doesn’t say which format it wants.')),
+    h('div', { class: 'kblock2' }, h('h3', {}, 'Answers'), h('label', { class: 'fld', for: 'st-df' }, h('span', { class: 'lbl' }, 'Default date format'), df)),
     h('div', { class: 'kblock2' }, h('h3', {}, 'Fill record'),
       (() => { const sel = h('select', { id: 'st-ret' }, [[0, 'Keep everything'], [10, '10 years'], [7, '7 years'], [5, '5 years'], [2, '2 years'], [1, '1 year']].map(([v, l]) => h('option', { value: v }, l))); sel.value = String(K.P.settings.logYears || 0);
         sel.onchange = () => { K.P.settings.logYears = +sel.value; const n = pruneLog(); persist(); if (n) C.toast(`Removed ${n} older record${n > 1 ? 's' : ''}.`); drawPanel(); };
         return h('label', { class: 'fld', for: 'st-ret' }, h('span', { class: 'lbl' }, 'Keep records for'), sel); })(),
-      h('p', { class: 'hint' }, 'The record holds what you sent, including UBO and director details. Older entries are deleted when the profile is unlocked.')),
+      h('p', { class: 'hint' }, 'Older records are deleted on unlock.')),
     h('div', { class: 'kblock2' }, h('h3', {}, 'Profile file'),
       h('p', { class: 'hint' }, info.path || ''),
       h('div', { class: 'btns' },
@@ -628,8 +614,7 @@ function settingsView() {
           const { open } = await import('@tauri-apps/plugin-dialog');
           const p = await open({ multiple: false, filters: [{ name: 'Proof profile', extensions: ['vault'] }] }); if (!p) return;
           await flush().catch(() => {}); await V.use(p); afterLock();
-        } }, 'Open a different profile…') : null),
-      h('p', { class: 'hint' }, 'A profile in a shared folder works for a team: Proof notices when someone else saved in the meantime and asks before overwriting. It locks after 15 minutes without use.')),
+        } }, 'Open a different profile…') : null)),
     h('div', { class: 'kblock2' }, h('h3', {}, 'Change passphrase'),
       h('div', { class: 'kgrid' }, h('label', { class: 'fld', for: 'st-old' }, h('span', { class: 'lbl' }, 'Current'), old), h('label', { class: 'fld', for: 'st-n1' }, h('span', { class: 'lbl' }, 'New'), n1), h('label', { class: 'fld', for: 'st-n2' }, h('span', { class: 'lbl' }, 'New again'), n2)), pmsg,
       h('div', { class: 'btns' }, h('button', { class: 'btn', onclick: async () => {
@@ -655,7 +640,7 @@ export function formSection(body, docs) {
 export async function attachDocs() {
   if (!(await ensureUnlocked())) return;
   const ent = curEntity(); const { h, modal } = C;
-  if (!ent.docs.length) { C.toast('No documents in the profile yet. Add them under Profile → Documents.', 6000); openProfile('docs'); return; }
+  if (!ent.docs.length) { C.toast('No documents in the profile.', 6000); openProfile('docs'); return; }
   const picks = new Set();
   const list = ent.docs.map(d => {
     const n = ageNote(d); const id = 'ad-' + d.id;
@@ -663,7 +648,7 @@ export async function attachDocs() {
     const owner = d.owner ? ent.people.find(p => p.id === d.owner) : null;
     return h('label', { class: 'opt' + (n.bad ? ' bad' : ''), for: id }, cb, h('div', {}, `${d.title}`, h('small', {}, `${docTypeInfo(d.type)[1]}${owner ? ' · ' + personName(owner) : ''} · ${n.text}`)));
   });
-  const m = modal('Attach documents', h('p', { class: 'hint' }, 'Their pages are added at the end of this document, in the order ticked.'), h('div', { class: 'kattach' }, list),
+  const m = modal('Attach documents', h('div', { class: 'kattach' }, list),
     h('div', { class: 'actions' }, h('button', { class: 'btn quiet', onclick: () => m.close() }, 'Cancel'), h('button', { class: 'btn primary', onclick: go }, 'Attach')));
   async function go() {
     if (!picks.size) return;
@@ -673,6 +658,6 @@ export async function attachDocs() {
     try { for (const d of picks) entries.push(await docEntry(d)); } catch (e) { b.done(); C.toast(errMsg(e), 7000); return; }
     b.done();
     await C.insertEntries(entries, C.S.pages.length);
-    if (old.length) setTimeout(() => C.toast(`Heads-up: ${old.map(d => d.title).join(', ')} ${old.length > 1 ? 'are' : 'is'} older than counterparties usually accept.`, 8000), 3800);
+    if (old.length) setTimeout(() => C.toast(`Out of date: ${old.map(d => d.title).join(', ')}`, 8000), 3800);
   }
 }

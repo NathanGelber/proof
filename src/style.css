@@ -426,7 +426,6 @@ details.more > summary { font-family: var(--mono); font-size: 10.5px; text-trans
 .krecent span { font-family: var(--mono); font-size: 11px; color: var(--mute); }
 .kgate { max-width: 560px; }
 .kgate .fld input { width: 100%; }
-.ksteps { margin: 0; padding-left: 20px; color: var(--mute); line-height: 1.7; }
 
 .hv .rv-row.lib { grid-template-columns: 22px minmax(200px, 1.2fr) minmax(200px, 1fr) minmax(170px, 1fr); }
 .rv-ans small.ok { color: var(--f2); }

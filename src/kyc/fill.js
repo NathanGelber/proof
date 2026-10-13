@@ -1,6 +1,6 @@
 // Fill from profile: one session per form.
 //
-// Proof fills everything it's sure of straight away and shows it on the pages: green for
+// Fills what it is sure of straight away and shows it on the pages: green for
 // confident answers, amber for ones to check. A short side list holds only what needs a
 // decision. Click a field on the page, or a row in the list, to change what goes in it.
 // Claude runs on whatever's left, if it's switched on. The counterparty is asked once, at save,
@@ -69,7 +69,7 @@ export async function fillNow(pick = false) {
 /** A file picked or dropped in the KYC tab: Word and Excel open in the preview, PDFs on the shared pages. */
 async function startFromEntries(entries) {
   const e = entries.find(x => isOfficeName(x.name) || /pdf$/i.test(x.type || '') || /\.pdf$/i.test(x.name));
-  if (!e) { C.toast('That isn’t a form Proof can fill: use a PDF, Word or Excel file.', 6000); return; }
+  if (!e) { C.toast('Unsupported file. Use PDF, Word or Excel.', 6000); return; }
   if (isOfficeName(e.name)) return startOffice(e);
   if (SES?.kind === 'office' && !(await closeOfficeView())) return;
   const before = new Set(C.S.docs);
@@ -105,7 +105,7 @@ async function startPdf(doc, entity) {
   b.done();
   const flat = !fields.length;
   const fl = flat ? flatLines(lines) : null;
-  if (flat && !fl.some(l => !l.heading)) { C.toast('This form has no fillable fields and no text Proof can read (it may be a scan). Use the Text tool, or run it through OCR first.', 8000); return; }
+  if (flat && !fl.some(l => !l.heading)) { C.toast('No fields or readable text (scanned PDF?).', 8000); return; }
   if (SES && SES.kind !== 'office') clearApplied(SES);
   const saved = K.P.mappings[fp];
   SES = newSession(flat ? 'flat' : 'pdf', ent, fp, saved, { doc });
@@ -126,7 +126,7 @@ export async function startOffice(entry, entity) {
   try { od = await loadOffice(entry.bytes, entry.name); }
   catch (e) { b.done(); C.toast(e?.message || String(e), 8000); return; }
   b.done();
-  if (!od.slots.length) { C.toast(`Proof couldn’t find any spots for answers in ${entry.name}: no empty cells beside labels, blanks, form fields or tick boxes.`, 8000); return; }
+  if (!od.slots.length) { C.toast(`No answer fields found in ${entry.name}.`, 8000); return; }
   const fp = 'office:' + await sha256(JSON.stringify([od.kind, od.slots.map(s => [s.name, s.left, s.above, s.tip, s.right])]));
   if (SES?.kind === 'office' && !(await closeOfficeView())) return;
   SES = newSession('office', ent, fp, K.P.mappings[fp], { entry, od });
@@ -362,7 +362,7 @@ async function runClaude() {
 async function showSent() {
   const { h, modal } = C;
   const open = SES.items.filter(it => it.status === 'empty' && !it.touched).map(it => it.target);
-  if (!open.length) { C.toast('Nothing left for Claude: every spot is matched or cleared.'); return; }
+  if (!open.length) { C.toast('Nothing left to match.'); return; }
   try {
     const req = claudeRequest(SES.ent, SES.kind === 'flat' ? { lines: open, avoid: [SES.counterparty] } : { fields: open.slice(0, 140), avoid: [SES.counterparty] });
     const [text, removed] = await V.preview(req);
@@ -409,13 +409,12 @@ function panel() {
       h('span', { class: 'n ok' }, String(filled.length)), ' filled',
       check.length ? [' · ', h('span', { class: 'n check' }, String(check.length)), ' to check'] : null,
       missing.length ? [' · ', h('span', { class: 'n miss' }, String(missing.length)), ' not in profile'] : null),
-    ses.saved ? h('p', { class: 'hint' }, `Recognised form, last filled ${fmtDate(ses.saved.updated)}.`) : null));
+    ses.saved ? h('p', { class: 'hint' }, `Last filled ${fmtDate(ses.saved.updated)}`) : null));
 
   const cl = ses.claude;
-  if (cl.state === 'running') wrapEl.append(h('p', { class: 'fp-cl' }, `Asking Claude about ${cl.left} more spot${cl.left > 1 ? 's' : ''} (labels only)…`));
-  else if (cl.state === 'done') wrapEl.append(h('p', { class: 'fp-cl' }, cl.got ? `Claude matched ${cl.got} of ${cl.left}.` : `Claude found nothing for the ${cl.left} remaining.`, ' ', h('button', { class: 'lnk', onclick: showSent }, 'What was sent?')));
+  if (cl.state === 'running') wrapEl.append(h('p', { class: 'fp-cl' }, `Matching ${cl.left} with Claude…`));
+  else if (cl.state === 'done') wrapEl.append(h('p', { class: 'fp-cl' }, cl.got ? `Claude matched ${cl.got} of ${cl.left}.` : `Claude matched 0 of ${cl.left}.`, ' ', h('button', { class: 'lnk', onclick: showSent }, 'What was sent?')));
   else if (cl.state === 'error') wrapEl.append(h('p', { class: 'fp-cl err' }, cl.msg, ' ', h('button', { class: 'lnk', onclick: () => runClaude() }, 'Retry')));
-  else if (cl.state === 'off' && K.P.settings.useClaude !== false) wrapEl.append(h('p', { class: 'fp-cl' }, `${cl.left} spot${cl.left > 1 ? 's' : ''} left. `, h('button', { class: 'lnk', onclick: () => openProfile('settings') }, 'Add an API key'), ' to let Claude match them.'));
 
   const group = (title, items, cls) => items.length ? h('section', { class: 'fp-g ' + cls }, h('h4', {}, title, h('b', {}, String(items.length))), items.map(card)) : null;
   const fold = (key, title, items) => {
@@ -428,7 +427,7 @@ function panel() {
     group('To check', check, 'check'),
     group('Not in your profile', missing, 'miss'),
     group('Maybe', suggest, 'sugg'),
-    !check.length && !missing.length && !suggest.length ? h('p', { class: 'fp-done' }, filled.length ? 'Nothing needs you. Look over the pages, then save.' : 'Proof didn’t find anything to fill.') : null,
+    !check.length && !missing.length && !suggest.length ? h('p', { class: 'fp-done' }, filled.length ? 'All filled.' : 'Nothing to fill.') : null,
     fold('filled', 'Filled', ok),
     fold('empty', ses.kind === 'flat' ? 'Lines left empty' : 'Left empty', empty)].filter(Boolean));
 
@@ -436,7 +435,6 @@ function panel() {
     ses.kind === 'office'
       ? h('button', { class: 'btn primary', onclick: saveOffice }, 'Save filled copy…')
       : h('button', { class: 'btn primary', onclick: saveForm }, 'Save…'),
-    h('p', { class: 'hint' }, 'Proof asks who it’s for once, keeps a record and learns the labels.'),
     h('div', { class: 'btns' }, ses.kind !== 'office' ? h('button', { class: 'btn quiet', onclick: attachDocs }, 'Attach documents…') : null, h('button', { class: 'btn quiet', onclick: closeForm }, 'Close form'))));
 
   function card(it) {
@@ -487,7 +485,7 @@ function valueInput(def, onSet) {
   else if (def.kind === 'bool') el = h('select', {}, h('option', { value: '' }, 'Choose…'), h('option', { value: 'yes' }, 'Yes'), h('option', { value: 'no' }, 'No'));
   else if (def.kind === 'choice') el = h('select', {}, h('option', { value: '' }, 'Choose…'), def.choices.map(c => h('option', { value: c }, c)));
   else if (def.kind === 'longtext') el = h('textarea', { rows: '3' });
-  else el = h('input', { type: 'text', spellcheck: 'false', placeholder: 'Type, then Tab' });
+  else el = h('input', { type: 'text', spellcheck: 'false' });
   el.setAttribute('aria-label', def.label);
   // Saved when you leave the field (Tab, Enter, or clicking elsewhere); the next missing one gets the cursor.
   let done = false;
@@ -504,7 +502,7 @@ const fmtDate = iso => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || ''); r
 
 function summaryToast() {
   const f = SES.items.filter(i => i.applied).length, c = SES.items.filter(i => i.status === 'check' || i.status === 'missing' || i.status === 'suggest').length;
-  C.toast(f ? `Filled ${f}.${c ? ` ${c} need${c === 1 ? 's' : ''} you, listed on the right.` : ' Nothing needs you.'}` : 'Nothing matched yet.', 4500);
+  C.toast(f ? `Filled ${f}${c ? ` · ${c} need input` : ''}` : 'Nothing matched yet.', 4500);
 }
 
 // ================================================================ marks on PDF pages
@@ -550,7 +548,6 @@ function askCounterparty(ses) {
   return new Promise(resolve => {
     const inp = h('input', { type: 'text', id: 'cp-in', value: ses.counterparty || '' });
     const m = modal('Who is this for?',
-      h('p', { class: 'hint' }, 'For your fill record. Asked once per form.'),
       h('label', { class: 'fld', for: 'cp-in' }, h('span', { class: 'lbl' }, 'Counterparty'), inp),
       h('div', { class: 'actions' }, h('button', { class: 'btn quiet', onclick: () => { m.close(); resolve(''); } }, 'Skip'), h('button', { class: 'btn primary', onclick: ok }, 'Continue')));
     inp.addEventListener('keydown', e => { if (e.key === 'Enter') ok(); });
@@ -813,5 +810,5 @@ async function saveOffice() {
   catch (e) { b.done(); C.toast('Couldn’t save: ' + (e?.message || e), 8000); return; }
   b.done();
   record(ses); drawSide();
-  C.toast(`Saved ${path.startsWith('download:') ? path.slice(9) : host.baseName(path)}. The original is untouched.`, 6000);
+  C.toast(`Saved ${path.startsWith('download:') ? path.slice(9) : host.baseName(path)}`, 6000);
 }

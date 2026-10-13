@@ -10,8 +10,8 @@
 <div id="app" class="nodoc">
   <header class="tb" role="toolbar" aria-label="Main toolbar">
     <nav class="modes" role="tablist" aria-label="Workspace">
-      <button role="tab" data-m="pdf" aria-selected="true" title="Edit PDFs">PDF</button>
-      <button role="tab" data-m="kyc" aria-selected="false" title="Your KYC profile and filling forms from it">KYC</button>
+      <button role="tab" data-m="pdf" aria-selected="true">PDF</button>
+      <button role="tab" data-m="kyc" aria-selected="false">KYC</button>
     </nav>
     <div class="grp pdf-only">
       <button class="tbtn" id="bOpen" title="Open a PDF (Ctrl+O)">Open</button>
@@ -22,7 +22,7 @@
       <button class="tbtn doc-only" id="bClose" title="Close this document (Ctrl+W)">Close</button>
     </div>
     <div class="grp kyc-only">
-      <button class="tbtn" id="kOpen" title="Open a form to fill from your profile (PDF, Word, Excel)">Open form</button>
+      <button class="tbtn" id="kOpen" title="Open form (Ctrl+O)">Open form</button>
       <button class="tbtn fill-only" id="kSave" title="Save (Ctrl+S)">Save</button>
       <button class="tbtn fill-only" id="kClose" title="Close this form (Ctrl+W)">Close form</button>
     </div>
@@ -35,7 +35,7 @@
       <button data-t="text" aria-pressed="false" title="Add text (T)">Text<kbd>T</kbd></button>
       <button data-t="date" aria-pressed="false" title="Stamp today’s date (D)">Date<kbd>D</kbd></button>
       <button data-t="cover" aria-pressed="false" title="Cover with a box (C)">Cover<kbd>C</kbd></button>
-      <button data-t="redact" aria-pressed="false" title="Redact: remove what’s underneath (R)">Redact<kbd>R</kbd></button>
+      <button data-t="redact" aria-pressed="false" title="Redact (R)">Redact<kbd>R</kbd></button>
       <button data-t="image" aria-pressed="false" title="Place an image (I)">Image<kbd>I</kbd></button>
       <button data-t="sign" aria-pressed="false" title="Sign (S)">Sign<kbd>S</kbd></button>
     </div>
