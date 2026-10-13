@@ -136,6 +136,7 @@ export async function harvestForm(ent) {
 
   const rows = answers.map(d => {
     const p = props.get(d.id); let key = p?.key || null;
+    if (key && !keyDef(ent, key)) key = null;
     if (key === 'today') key = null; // a signing date isn't profile data
     const label = d.kind === 'check' && d.left && d.right ? `${d.left} → ${d.right}` : fieldLabel(d) || '(no label)';
     const r = { d, label, key, as: p?.as || (key ? autoAs(ent, key, d) : ''), conf: p?.confidence || null };

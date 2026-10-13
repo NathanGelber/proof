@@ -65,8 +65,6 @@ export const ENTITY_KEYS = [
   k('equity', 'Equity', 'text', ['equity', 'net assets', 'shareholders equity', 'eigen vermogen', 'capital'], { group: 'business' }),
   k('source_of_funds', 'Source of funds', 'longtext', ['source of funds', 'origin of funds', 'herkomst van de middelen', 'herkomst gelden', 'source of the funds'], { group: 'business' }),
   k('source_of_wealth', 'Source of wealth', 'longtext', ['source of wealth', 'origin of wealth', 'herkomst vermogen'], { group: 'business' }),
-  k('purpose', 'Purpose of the relationship', 'longtext', ['purpose of the business relationship', 'purpose of the relationship', 'purpose of the account', 'reason for opening', 'intended nature of the business relationship', 'doel van de relatie', 'purpose and intended nature'], { group: 'business' }),
-  k('expected_activity', 'Expected activity', 'longtext', ['expected activity', 'expected volume', 'anticipated activity', 'expected transactions', 'anticipated volume', 'expected turnover', 'expected number of transactions'], { group: 'business' }),
 
   k('bank_name', 'Bank name', 'text', ['bank name', 'name of bank', 'bank'], { group: 'bank' }),
   k('iban', 'IBAN', 'text', ['iban', 'account number', 'bank account number', 'rekeningnummer', 'bank account'], { group: 'bank' }),
@@ -173,8 +171,6 @@ const MORE = {
   equity: ['own funds', 'total equity', 'net worth'],
   source_of_funds: ['where do the funds come from', 'source of incoming funds', 'funds origin', 'origin of the funds', 'source of funds for the account', 'source of funds used'],
   source_of_wealth: ['how was the wealth generated', 'wealth origin', 'source of capital', 'origin of the wealth', 'source of the entity s wealth'],
-  purpose: ['intended nature of the relationship', 'reason for the relationship', 'reason for opening the account', 'intended purpose', 'purpose of account opening', 'nature and purpose of the relationship', 'intended use of the account', 'purpose of the account relationship', 'reason for establishing the relationship', 'anticipated use of services', 'services required', 'products and services required'],
-  expected_activity: ['expected transaction volume', 'expected monthly volume', 'expected annual volume', 'expected turnover through the account', 'estimated volume', 'projected activity', 'expected trading volume', 'expected account activity', 'anticipated account activity', 'expected value of transactions', 'expected frequency of transactions'],
   bank_name: ['name of the bank', 'banking institution', 'bank institution', 'name of bank'],
   iban: ['iban number', 'account no', 'international bank account number', 'bank account no'],
   bic: ['bic swift', 'swift bic code', 'swift address', 'bic swift code'],

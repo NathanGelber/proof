@@ -144,6 +144,7 @@ function newSession(kind, ent, fp, saved, extra) {
 }
 
 function addItem(target, p, extra = {}) {
+  if (p?.key && p.key !== TYPED && !keyDef(SES.ent, p.key)) p = null; // an item no longer in the profile schema
   const it = { n: SES.items.length, target, name: target.name || null, key: p?.key || null, as: p?.as || '', conf: p?.confidence || null, source: p?.source || null, note: p?.note || '', place: p?.place, option: p?.option, label: p?.label, pos: p?.pos || null, status: 'empty', applied: false, touched: false, itemId: null, ...extra };
   SES.items.push(it); if (it.name) SES.byName.set(it.name, it);
   return it;
@@ -175,6 +176,8 @@ function buildFlat(lines, saved) {
 }
 
 // ================================================================ values and statuses
+/** The key of an answer typed for one form rather than taken from the profile. */
+const TYPED = '@typed';
 const fieldOf = it => (SES.kind === 'flat' ? { kind: it.place === 'mark' ? 'check' : 'text', text: it.target.text } : it.target);
 
 const PERSONAL = new Set(['first_name', 'last_name', 'date_of_birth', 'place_of_birth', 'country_of_birth', 'nationality', 'res_street', 'res_postcode', 'res_city', 'res_country', 'res_address', 'pep', 'pep_details', 'id_type', 'id_number', 'id_country', 'id_issued', 'id_expiry']);
@@ -312,6 +315,15 @@ function choose(it, key) {
   SES.picking = null; apply(it); refresh();
 }
 
+/** Fill a spot with typed text (or a tick or option), for this form only. Empty text clears it. */
+function typeAnswer(it, v) {
+  if (!v) { if (it.key === TYPED) clearIt(it); return; }
+  it.undone = null; it.key = TYPED; it.as = 'literal:' + v; it.conf = 'you'; it.source = 'you'; it.touched = true; it.note = '';
+  if (SES.kind === 'flat') { if (!it.place) it.place = 'right'; if (!it.label) it.label = lineLabel(it.target.text || ''); }
+  evaluate(it); it.status = 'ok'; SES.focusNext = 'free';
+  apply(it); refresh();
+}
+
 /** Typing a missing value here saves it to the profile, then fills every field that uses it. */
 function saveMissing(it, v) {
   const def = keyDef(SES.ent, it.key); if (!def) return;
@@ -442,8 +454,10 @@ function panel() {
     const sel = ses.sel === it.n;
     const el = h('div', { class: `fc st-${it.status}${sel ? ' sel' : ''}`, 'data-n': it.n });
     el.append(h('button', { class: 'fc-l', title: 'Show on the form', onclick: () => select(it) }, itemLabel(it)));
-    if (it.key) el.append(h('div', { class: 'fc-k' }, keyLabel(ent, it.key) + (it.na ? ' · doesn’t apply to a company' : '')));
+    const typed = it.key === TYPED;
+    if (it.key && !typed) el.append(h('div', { class: 'fc-k' }, keyLabel(ent, it.key) + (it.na ? ' · doesn’t apply to a company' : '')));
     if (it.status === 'missing') el.append(missingBox(it));
+    else if (typed || (!it.key && it.status === 'empty' && ses.picking !== it.n)) el.append(freeBox(it));
     else if (it.key) el.append(h('div', { class: 'fc-a' }, it.show || '—'));
     for (const t of [it.problem, it.note]) if (t) el.append(h('div', { class: 'fc-n' }, t));
     if (ses.picking === it.n) {
@@ -454,17 +468,37 @@ function panel() {
       requestAnimationFrame(() => inp.focus());
     } else {
       const b = (label, fn, cls = '') => h('button', { class: 'btn ' + cls, onclick: fn }, label);
-      const change = b(it.key ? 'Change' : 'Choose item', () => { ses.sel = it.n; ses.picking = it.n; refresh(); }, 'quiet');
+      const change = b(it.key && !typed ? 'Change' : 'Choose item', () => { ses.sel = it.n; ses.picking = it.n; refresh(); }, 'quiet');
       const acts = {
         check: [it.applied ? b('Looks right', () => confirmIt(it)) : null, change, b('Clear', () => clearIt(it), 'quiet')],
         suggest: [b('Use', () => useIt(it)), change, b('No', () => clearIt(it), 'quiet')],
         missing: [change, b('Skip', () => clearIt(it), 'quiet')],
-        ok: sel ? [change, b('Clear', () => clearIt(it), 'quiet')] : [],
+        ok: sel || typed ? [change, b('Clear', () => clearIt(it), 'quiet')] : [],
         empty: [change],
       }[it.status] || [];
       if (acts.some(Boolean)) el.append(h('div', { class: 'fc-b' }, acts));
     }
     return el;
+  }
+
+  /** An answer typed for this form only: it isn't saved to the profile, but the form remembers it. */
+  function freeBox(it) {
+    const f = fieldOf(it), cur = it.key === TYPED ? it.as.slice(8) : '';
+    let el;
+    const opt = (v, l) => h('option', { value: v }, l);
+    if (f.kind === 'check') el = h('select', {}, opt('', '—'), opt('yes', 'Ticked'), opt('no', 'Not ticked'));
+    else if ((f.kind === 'radio' || f.kind === 'select') && f.options?.length) el = h('select', {}, opt('', '—'), f.options.map(o => opt(o, o)));
+    else if (f.multi) el = h('textarea', { rows: '3', spellcheck: 'false' });
+    else el = h('input', { type: 'text', spellcheck: 'false' });
+    el.value = cur; el.setAttribute('aria-label', 'Answer for this form');
+    let done = false;
+    const go = () => { if (done) return; const v = (el.value || '').trim(); if (v === cur) return; done = true; typeAnswer(it, v); };
+    el.addEventListener('change', go);
+    el.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && (el.tagName !== 'TEXTAREA' || e.ctrlKey)) { e.preventDefault(); go(); }
+      if (e.key === 'Escape') { e.stopPropagation(); el.value = cur; el.blur(); }
+    });
+    return h('div', { class: 'fc-in fc-free' }, el);
   }
 
   function missingBox(it) {
@@ -631,8 +665,9 @@ function drawSide() {
   const top = side.scrollTop;
   side.replaceChildren(panel()); side.scrollTop = top;
   if (SES.focusNext) {
-    SES.focusNext = false;
-    const next = side.querySelector('.fp-g.miss .fc-in input, .fp-g.miss .fc-in select, .fp-g.miss .fc-in textarea');
+    const want = SES.focusNext; SES.focusNext = false;
+    const sel = want === 'free' ? '.fp-g.fold .fc-free input, .fp-g.fold .fc-free select, .fp-g.fold .fc-free textarea' : '.fp-g.miss .fc-in input, .fp-g.miss .fc-in select, .fp-g.miss .fc-in textarea';
+    const next = [...side.querySelectorAll(sel)].find(x => !x.value);
     if (next) { next.focus(); next.closest('.fc')?.scrollIntoView({ block: 'nearest' }); return; }
   }
   side.querySelector('.fc.sel')?.scrollIntoView({ block: 'nearest' });
