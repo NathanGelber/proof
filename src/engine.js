@@ -5,7 +5,7 @@
 
 import * as pdfjsLib from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
-import { PDFDocument, PDFName, StandardFonts, rgb, degrees, PDFTextField, PDFCheckBox, PDFDropdown, PDFRadioGroup, PDFOptionList } from 'pdf-lib';
+import { PDFDocument, PDFName, StandardFonts, rgb, degrees, PDFTextField, PDFCheckBox, PDFDropdown, PDFRadioGroup, PDFOptionList, PDFSignature } from 'pdf-lib';
 import fontkit from '@pdf-lib/fontkit';
 import { systemFont } from './host.js';
 
@@ -79,7 +79,10 @@ export function readFields(ld) {
   const widgets = f => { try { return f.acroField.getWidgets().map(w => { const r = w.getRectangle(); return { page: pageOf(w), rect: [r.x, r.y, r.width, r.height] }; }).filter(w => w.page >= 0); } catch { return []; } };
   let xfa = false; try { xfa = form.hasXFA(); } catch {}
   let fs = []; try { fs = form.getFields(); } catch {}
+  let signed = false;
   for (const f of fs) {
+    // A signature field with a value: the file carries a digital signature that any rewrite invalidates.
+    if (f instanceof PDFSignature) { try { if (f.acroField.dict.get(PDFName.of('V'))) signed = true; } catch {} continue; }
     const name = f.getName(); let ro = false; try { ro = f.isReadOnly(); } catch {}
     try {
       if (f instanceof PDFTextField) out.push({ name, kind: 'text', value: f.getText() || '', multi: f.isMultiline(), ro });
@@ -90,14 +93,14 @@ export function readFields(ld) {
     } catch {}
     if (out.length && out[out.length - 1].name === name) { out[out.length - 1].widgets = widgets(f); try { out[out.length - 1].maxLen = f instanceof PDFTextField ? f.getMaxLength() || 0 : 0; } catch {} }
   }
-  return { fields: out, xfa };
+  return { fields: out, xfa, signed };
 }
 
 export async function inspect(bytes) {
   const ld = await PDFDocument.load(bytes, { updateMetadata: false });
-  const { fields, xfa } = readFields(ld);
+  const { fields, xfa, signed } = readFields(ld);
   let title = ''; try { title = ld.getTitle() || ''; } catch {}
-  return { fields, xfa, title };
+  return { fields, xfa, signed, title };
 }
 
 function applyForm(ld, values, xfa, errs) {
@@ -293,6 +296,24 @@ export async function renderPngs(bytes, dpi = 150, onPage) {
       const pg = doc.loadPage(i);
       const pix = pg.toPixmap(mu.Matrix.scale(dpi / 72, dpi / 72), mu.ColorSpace.DeviceRGB, false, true);
       out.push(pix.asPNG().slice()); pix.destroy?.(); pg.destroy?.();
+    }
+  } finally { doc.destroy?.(); }
+  return out;
+}
+
+/** Pages of a finished PDF as PNGs for printing, with each page's size in points (rotation applied). */
+export async function renderForPrint(bytes, dpi, onPage) {
+  const mu = await mupdf();
+  const doc = mu.Document.openDocument(bytes, 'application/pdf'); const out = [];
+  try {
+    const n = doc.countPages();
+    for (let i = 0; i < n; i++) {
+      onPage?.(i, n);
+      const pg = doc.loadPage(i); const [x0, y0, x1, y1] = pg.getBounds();
+      const w = x1 - x0, h = y1 - y0;
+      const sc = Math.min(dpi / 72, Math.sqrt(60e6 / Math.max(1, w * h))); // keep huge pages under ~60 megapixels
+      const pix = pg.toPixmap(mu.Matrix.scale(sc, sc), mu.ColorSpace.DeviceRGB, false, true);
+      out.push({ png: pix.asPNG().slice(), w, h }); pix.destroy?.(); pg.destroy?.();
     }
   } finally { doc.destroy?.(); }
   return out;

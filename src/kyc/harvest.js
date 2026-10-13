@@ -111,7 +111,7 @@ const showVal = (def, v) => def?.kind === 'country' ? (COUNTRIES.find(c => c[0] 
 export async function harvestForm(ent) {
   if (!(await ensureUnlocked())) return;
   ent ||= curEntity(); if (!ent) return;
-  const picked = await host.pickOpen({ multiple: false, title: 'Choose a form you’ve already filled' });
+  const picked = await host.pickOpen({ multiple: false, title: 'Choose a form you’ve already filled', office: true });
   const f = picked[0]; if (!f) return;
   if (!isOfficeName(f.name) && !/\.pdf$/i.test(f.name)) { C.toast('Use a filled PDF, Word or Excel form.', 6000); return; }
   const b = C.busy('Reading the answers…'); let answers;

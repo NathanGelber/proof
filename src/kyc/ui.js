@@ -37,7 +37,7 @@ export function initKyc(ctx) {
     if (errKind(e) === 'CONFLICT') return conflict();
     C.toast('Couldn’t save the profile: ' + errMsg(e), 8000);
   });
-  onChange(() => { if (C.S.itab === 'form') C.renderInsp(); const st = document.querySelector('#kycnav .kstate'); if (st) st.textContent = K.dirty ? 'Saving…' : 'Saved · encrypted'; });
+  onChange(() => { const st = document.querySelector('#kycnav .kstate'); if (st) st.textContent = K.dirty ? 'Saving…' : ''; });
   initFill(C); initHarvest(C);
   C.hooks.layout = () => { if (layoutKyc() && C.mode() === 'kyc') { drawNav(); if (view.sec === 'form' && !fillKind()) drawPane(); } };
   C.hooks.show = () => renderKyc();
@@ -173,7 +173,7 @@ function drawNav() {
   const items = [['form', formLabel ? 'Form: ' + formLabel : 'Fill a form'], '-', ...GROUPS, ['people', 'People'], ['docs', 'Documents'], ['custom', 'Custom items'], '-', ['log', 'Fill record'], ['forms', 'Saved forms'], ['library', 'Label library'], ['settings', 'Settings']];
   nav.replaceChildren(
     h('div', { class: 'kn-h' }, entSel,
-      h('div', { class: 'kn-st' }, h('span', { class: 'kstate' }, K.dirty ? 'Saving…' : 'Saved · encrypted'), h('button', { class: 'lnk', onclick: async () => { await lockNow(); afterLock('Profile locked.'); } }, 'Lock'))),
+      h('div', { class: 'kn-st' }, h('span', { class: 'kstate' }, K.dirty ? 'Saving…' : ''), h('button', { class: 'lnk', onclick: async () => { await lockNow(); afterLock('Profile locked.'); } }, 'Lock'))),
     h('div', { class: 'kn' }, items.map(it => it === '-' ? h('hr') : h('button', { 'aria-pressed': String(view.sec === it[0]), class: it[0] === 'form' && formLabel ? 'live' : null, title: it[0] === 'form' && formLabel ? formLabel : null, onclick: () => { if (view.sec !== 'form') flush().catch(() => {}); view.sec = it[0]; view.person = null; renderKyc(); } }, h('span', {}, it[1]), count[it[0]] ? h('b', {}, count[it[0]]) : null))));
 }
 
@@ -291,7 +291,7 @@ function editor(bag, def, ent, onSet) {
   else if (def.kind === 'choice') { ctl = h('select', { id }, h('option', { value: '' }, '—'), def.choices.map(c => h('option', { value: c }, c))); ctl.value = cur; ctl.addEventListener('change', () => set(ctl.value)); }
   else {
     ctl = h('input', { type: 'text', id, inputmode: def.kind === 'number' ? 'decimal' : null, spellcheck: 'false' }); ctl.value = cur;
-    if (def.kind === 'computed') ctl.placeholder = computedPreview(bag, def, ent) || 'Built from the parts';
+    if (def.kind === 'computed') ctl.placeholder = computedPreview(bag, def, ent) || '';
     ctl.addEventListener('change', () => set(ctl.value.trim()));
   }
   let meta = metaFor();
@@ -299,8 +299,6 @@ function editor(bag, def, ent, onSet) {
     const v = bag[def.key];
     const hist = v?.hist || [];
     const bits = [];
-    if (v?.at && v.v !== '') bits.push('Since ' + fmtDate(v.at));
-    if (def.kind === 'computed' && !v?.v) bits.push('Built from the parts; type to override');
     const line = h('div', { class: 'kmeta' }, bits.join(' · '));
     if (hist.length) {
       const d = h('details', {}, h('summary', {}, `${hist.length} earlier value${hist.length > 1 ? 's' : ''}`),
@@ -321,7 +319,16 @@ function groupEditor(ent, g) {
   const wrap = h('div', { class: 'kgrid' });
   const draw = () => wrap.replaceChildren(...defs.map(d => editor(ent.values, d, ent, () => { if (d.key === 'legal_name' && ent.values.legal_name?.v) { ent.name = ent.values.legal_name.v; persist(); } if (/^(reg|op)_/.test(d.key)) draw(); })));
   draw();
-  return h('section', { class: 'kblock' }, h('h2', {}, title), wrap);
+  const del = g === 'identity' ? h('div', { class: 'btns kdel' }, h('button', { class: 'btn quiet danger', onclick: () => deleteEntity(ent) }, 'Delete entity…')) : null;
+  return h('section', { class: 'kblock' }, h('h2', {}, title), wrap, del);
+}
+function deleteEntity(ent) {
+  confirmDo(`Delete ${ent.name}?`, 'Its values, people and stored documents are removed from the profile. The fill record keeps what was sent.', 'Delete entity', async () => {
+    for (const d of ent.docs) { try { await V.docDelete(d.id); } catch {} }
+    K.P.entities = K.P.entities.filter(e => e !== ent);
+    if (K.P.entities[0]) setCurEntity(K.P.entities[0].id);
+    persist(); view.sec = K.P.entities.length ? 'identity' : 'form'; view.person = null; renderKyc();
+  });
 }
 
 // ---- people
@@ -433,7 +440,7 @@ function docsView(ent) {
   });
   return h('section', { class: 'kblock' }, h('h2', {}, 'Documents'),
     h('div', { class: 'btns' }, h('button', { class: 'btn', onclick: () => addDocs(ent) }, 'Add documents…')),
-    rows.length ? h('div', { class: 'kdocs' }, rows) : h('p', { class: 'hint' }, 'None yet.'));
+    rows.length ? h('div', { class: 'kdocs' }, rows) : h('p', { class: 'hint' }, 'None'));
 }
 
 // ---- custom items
@@ -483,7 +490,7 @@ function formsView() {
   const ms = Object.entries(K.P.mappings).sort((a, b) => (b[1].updated || '').localeCompare(a[1].updated || ''));
   return h('section', { class: 'kblock' }, h('h2', {}, 'Saved forms'),
     ms.length ? h('div', {}, ms.map(([fp, m]) => h('div', { class: 'file' }, h('span', { class: 'nm', title: m.title }, m.title), h('span', { class: 'pp' }, `${({ flat: 'flat PDF', acro: 'fillable PDF', docx: 'Word', xlsx: 'Excel' })[m.kind] || m.kind} · ${m.kind === 'flat' ? m.entries.length : Object.keys(m.entries).length} answers · ${fmtDate(m.updated)}`),
-      h('button', { class: 'x', 'aria-label': 'Forget ' + m.title, onclick: () => { delete K.P.mappings[fp]; persist(); drawPanel(); } }, '×')))) : h('p', { class: 'hint' }, 'None yet.'));
+      h('button', { class: 'x', 'aria-label': 'Forget ' + m.title, onclick: () => { delete K.P.mappings[fp]; persist(); drawPanel(); } }, '×')))) : h('p', { class: 'hint' }, 'None'));
 }
 
 // ---- label library
@@ -517,7 +524,7 @@ export async function pdfDoc(bytes) {
 
 /** Read a batch of counterparty forms, propose an item for each new label, and add what you confirm. */
 async function importForms(ent) {
-  const files = (await host.pickOpen({ title: 'Choose counterparty forms to learn from' })).filter(f => isOfficeName(f.name) || /\.pdf$/i.test(f.name));
+  const files = (await host.pickOpen({ title: 'Choose counterparty forms to learn from', office: true })).filter(f => isOfficeName(f.name) || /\.pdf$/i.test(f.name));
   if (!files.length) return;
   const b = C.busy('Reading forms…'); const seen = new Map(); const failed = [];
   for (const [i, f] of files.entries()) {
@@ -623,17 +630,6 @@ function settingsView() {
         const b = C.busy('Re-encrypting…');
         try { await flush(); await V.passphrase(old.value, n1.value); b.done(); old.value = n1.value = n2.value = ''; C.toast('Passphrase changed.'); } catch (e) { b.done(); pmsg.textContent = errMsg(e); }
       } }, 'Change passphrase'))));
-}
-
-// ---------------------------------------------------------------- Form tab: fill from profile
-/** The PDF Form tab: filling from the profile lives in the KYC tab, so this only points there. */
-export function formSection(body, docs) {
-  const { h, sec } = C;
-  const live = fillKind() === 'pdf';
-  body.append(sec('KYC',
-    h('p', { class: 'hint' }, live ? 'This form is being filled from your profile in the KYC tab.' : 'To fill this form from your KYC profile, use the KYC tab.'),
-    h('div', { class: 'btns' }, h('button', { class: 'btn', disabled: !docs.length, onclick: () => { C.setMode('kyc'); if (!live) fillNow(false); else showForm(); } }, live ? 'Go to the KYC tab' : 'Fill in the KYC tab'))));
-  return false;
 }
 
 // ---- attach stored documents

@@ -300,6 +300,7 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .manage(LaunchFiles(Mutex::new(launch)))
         .setup(|app| {
             let path = configured_vault(app.handle());

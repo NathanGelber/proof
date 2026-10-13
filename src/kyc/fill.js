@@ -57,7 +57,7 @@ export async function fillNow(pick = false) {
   if (!(await ensureUnlocked())) return;
   C.setMode('kyc');
   if (pick || !C.S.pages.length) {
-    const picked = await host.pickOpen({ multiple: false, title: 'Choose the form to fill' });
+    const picked = await host.pickOpen({ multiple: false, title: 'Choose the form to fill', office: true });
     if (picked.length) await startFromEntries(picked);
     return;
   }
@@ -292,7 +292,7 @@ function revealItem(it) {
 }
 
 function pickField(docId, name) {
-  if (!SES || SES.kind !== 'pdf' || SES.doc.id !== docId) { C.setTab('form'); return; }
+  if (!SES || SES.kind !== 'pdf' || SES.doc.id !== docId) return;
   const it = SES.byName.get(name); if (!it) return;
   if (C.mode() !== 'kyc') { C.setMode('kyc'); showForm(); }
   select(it, false);

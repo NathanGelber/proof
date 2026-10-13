@@ -6,11 +6,11 @@ import '@fontsource/mrs-saint-delafield/400.css';
 import './style.css';
 import Sortable from 'sortablejs';
 import * as host from './host.js';
-import { initKyc, formSection } from './kyc/ui.js';
-import { startOffice } from './kyc/fill.js';
+import { initKyc } from './kyc/ui.js';
 import { sigGet, sigSet, sigAvailable } from './kyc/vault.js';
 import { isOfficeName } from './kyc/office.js';
-import { pdfjsLib, mupdf, prepare, inspect, imageToPdf, compose, finalize, renderPngs, splitPages, blankPdf, Cancelled } from './engine.js';
+import { pdfjsLib, mupdf, prepare, inspect, imageToPdf, compose, finalize, renderPngs, renderForPrint, splitPages, blankPdf, Cancelled } from './engine.js';
+import { version } from '../package.json';
 
 mupdf(); // start loading the engine in the background
 
@@ -24,7 +24,7 @@ const defaultStamps = () => ({ header: { text: '', slot: 'tl' }, footer: { text:
 const S = {
   docs: [], pages: [], sel: new Set(), anchor: null, cur: null,
   tool: 'select', selItem: null, zoom: 'fit', itab: 'page',
-  stamps: defaultStamps(), opts: { strip: true, compress: true, password: '', flatten: false },
+  stamps: defaultStamps(), opts: { strip: false, compress: true, password: '', flatten: false },
   undo: [], redo: [], dirty: false, path: null, title: '', colorN: 0,
 };
 
@@ -68,7 +68,7 @@ const curPage = () => byUid(S.cur);
 const shortName = n => (n.length > 34 ? n.slice(0, 22) + '…' + n.slice(-9) : n);
 const today = () => new Date().toLocaleDateString(undefined, { day: '2-digit', month: '2-digit', year: 'numeric' });
 const visDocs = () => S.docs.filter(d => !d.hidden && S.pages.some(p => p.doc === d));
-const typing = () => /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName);
+const typing = () => { const a = document.activeElement; return /^(TEXTAREA|SELECT)$/.test(a?.tagName) || (a?.tagName === 'INPUT' && !/^(checkbox|radio|button)$/.test(a.type)); };
 const editCount = () => S.pages.reduce((a, p) => a + p.items.length, 0) + visDocs().reduce((a, d) => a + Object.keys(d.values).length, 0);
 const stampsActive = () => { const s = S.stamps; return !!(s.header.text.trim() || s.footer.text.trim() || s.num.fmt !== 'off' || s.bates.on || s.wm.text.trim()); };
 const blobToDataUrl = blob => new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(blob); });
@@ -120,7 +120,7 @@ async function loadEntry(e, notes) {
   const info = await inspect(prep.bytes);
   if (prep.unlocked && !prep.password) notes.push(`${e.name} had editing restrictions. They’re removed in what you save.`);
   if (prep.repaired) notes.push(`${e.name} was damaged and has been repaired.`);
-  return { id: uid(), name: e.name, path: e.path, bytes: prep.bytes, password: prep.password, pdf, proxies, fields: info.fields, xfa: info.xfa, values: {}, color: FILE_COLORS[S.colorN++ % FILE_COLORS.length], hidden: !!e.hidden, sample: !!e.sample };
+  return { id: uid(), name: e.name, path: e.path, bytes: prep.bytes, password: prep.password, pdf, proxies, fields: info.fields, xfa: info.xfa, signed: !!info.signed, values: {}, color: FILE_COLORS[S.colorN++ % FILE_COLORS.length], hidden: !!e.hidden, sample: !!e.sample };
 }
 function pagesOf(d) { return d.proxies.map((_, i) => ({ uid: uid(), doc: d, idx: i, rot: 0, items: [] })); }
 
@@ -146,21 +146,21 @@ function resetWorkspace() {
   kycHooks.reset?.();
   for (const d of S.docs) d.pdf.destroy?.();
   S.docs = []; S.pages = []; S.sel.clear(); S.cur = null; S.selItem = null; S.undo = []; S.redo = [];
-  S.stamps = defaultStamps(); S.opts.password = ''; S.path = null; S.title = ''; S.dirty = false; S.colorN = 0;
+  S.stamps = defaultStamps(); S.opts.password = ''; S.path = null; S.title = ''; S.dirty = false; S.colorN = 0; S.signedOk = false;
+  closeFind(); textCache.clear(); annCache.clear();
   pvs.clear(); thumbs.clear(); $('#pages').replaceChildren(); $('#thumbs').replaceChildren();
 }
 
-/** Open entries as a new document (replacing the current one). */
-/** Word and Excel forms go straight to Fill from profile. Returns the entries that are left. */
-async function takeOffice(entries) {
-  const off = entries.filter(e => isOfficeName(e.name)); if (!off.length) return entries;
-  if (off.length > 1) toast(`Opening ${off[0].name}. Word and Excel forms are filled one at a time.`, 5000);
-  await startOffice(off[0]);
+/** Word and Excel forms belong to the KYC tab. Returns the entries that are left. */
+function dropOffice(entries) {
+  if (!entries.some(e => isOfficeName(e.name))) return entries;
+  toast('Word and Excel forms open from the KYC tab.', 5000);
   return entries.filter(e => !isOfficeName(e.name));
 }
 
+/** Open entries as a new document (replacing the current one). */
 async function openEntries(entries) {
-  entries = await takeOffice(entries);
+  entries = dropOffice(entries);
   if (!entries.length) return;
   if (!(await confirmDiscard())) return;
   const b = busy('Opening…'); const notes = []; const loaded = [];
@@ -183,7 +183,7 @@ async function openEntries(entries) {
 
 /** Insert entries' pages after the selection / current page, or at the end. */
 async function insertEntries(entries, at) {
-  entries = await takeOffice(entries);
+  entries = dropOffice(entries);
   if (!entries.length) return;
   if (!S.pages.length) return openEntries(entries);
   const b = busy('Opening…'); const notes = []; const loaded = [];
@@ -211,20 +211,24 @@ async function openPaths(paths, mode) {
   }
   if (!entries.length) return;
   if (mode === 'insert') return insertEntries(entries);
-  if (mode === 'ask' && S.pages.length && !entries.every(e => isOfficeName(e.name))) {
-    const choice = await new Promise(resolve => {
-      const m = modal('Open',
-        h('p', {}, `Open ${entries.map(e => e.name).join(', ')} as its own document, or insert ${entries.length > 1 ? 'their' : 'its'} pages into ${S.title || 'the current document'}?`),
-        h('div', { class: 'actions' },
-          h('button', { class: 'btn quiet', onclick: () => { m.close(); resolve(null); } }, 'Cancel'),
-          h('button', { class: 'btn', onclick: () => { m.close(); resolve('insert'); } }, 'Insert pages'),
-          h('button', { class: 'btn primary', onclick: () => { m.close(); resolve('open'); } }, 'Open')));
-      m.scrim.addEventListener('cancel', () => resolve(null));
-    });
-    if (!choice) return;
-    return choice === 'insert' ? insertEntries(entries) : openEntries(entries);
-  }
+  if (mode === 'ask') return openOrInsert(entries);
   return openEntries(entries);
+}
+/** With a document open, ask whether new files open on their own or go into it. */
+async function openOrInsert(entries) {
+  entries = dropOffice(entries); if (!entries.length) return;
+  if (!S.pages.length) return openEntries(entries);
+  const choice = await new Promise(resolve => {
+    const m = modal('Open',
+      h('p', {}, `Open ${entries.map(e => e.name).join(', ')} as its own document, or insert ${entries.length > 1 ? 'their' : 'its'} pages into ${S.title || 'the current document'}?`),
+      h('div', { class: 'actions' },
+        h('button', { class: 'btn quiet', onclick: () => { m.close(); resolve(null); } }, 'Cancel'),
+        h('button', { class: 'btn', onclick: () => { m.close(); resolve('insert'); } }, 'Insert pages'),
+        h('button', { class: 'btn primary', onclick: () => { m.close(); resolve('open'); } }, 'Open')));
+    m.scrim.addEventListener('cancel', () => resolve(null));
+  });
+  if (choice === 'insert') return insertEntries(entries);
+  if (choice === 'open') return openEntries(entries);
 }
 
 // ---------------------------------------------------------------- saving
@@ -243,6 +247,7 @@ async function save(as = false, suffix = '') {
   if (kycHooks.beforeSave && !(await kycHooks.beforeSave())) return false;
   let path = !as && S.path;
   if (!path) { path = await host.pickSave(defaultSavePath(defaultSaveName(suffix))); if (!path) return false; }
+  path = await confirmSigned(path); if (!path) return false;
   const b = busy('Saving…');
   try {
     const { bytes, errs } = await produce(S.pages, {}, b);
@@ -254,6 +259,56 @@ async function save(as = false, suffix = '') {
     return true;
   } catch (e) { b.done(); toast('Couldn’t save: ' + (e?.message || e), 7000); return false; }
 }
+/** Saving rewrites the file, which invalidates a digital signature. Asks once per document. Resolves the path to save to, or null. */
+function confirmSigned(path) {
+  const sd = visDocs().filter(d => d.signed);
+  if (!sd.length || S.signedOk) return Promise.resolve(path);
+  const over = sd.some(d => d.path && d.path === path);
+  return new Promise(resolve => {
+    const done = v => { m.close(); if (v) S.signedOk = true; resolve(v); };
+    const m = modal('Digitally signed',
+      h('p', {}, `${sd.map(d => d.name).join(', ')} ${sd.length > 1 ? 'are' : 'is'} digitally signed. Saving changes breaks the signature.`),
+      h('div', { class: 'actions' },
+        h('button', { class: 'btn quiet', onclick: () => done(null) }, 'Cancel'),
+        over ? h('button', { class: 'btn primary', onclick: async () => { m.close(); const p = await host.pickSave(defaultSavePath(defaultSaveName(' - edited'))); if (p) S.signedOk = true; resolve(p); } }, 'Save a copy…') : null,
+        h('button', { class: over ? 'btn danger' : 'btn primary', onclick: () => done(path) }, over ? 'Save over it' : 'Save')));
+    m.scrim.addEventListener('cancel', () => resolve(null));
+  });
+}
+
+// ---------------------------------------------------------------- print
+/** Print pages as they are on screen (edits, answers, stamps, redactions), at actual size, through the system print dialog. */
+async function printPages(pages) {
+  if (!pages.length) return;
+  const b = busy('Preparing to print…'); let imgs;
+  try {
+    const { bytes } = await compose(pages, { flatten: false, strip: false, stamps: stampsActive() ? stampLayout : null, compress: false, password: '' }, t => b.set(t));
+    imgs = await renderForPrint(bytes, 300, (i, n) => b.set(`Preparing page ${i + 1} of ${n}`));
+  } catch (e) { b.done(); toast('Couldn’t print: ' + (e?.message || e), 7000); return; }
+  const sizes = new Map(), css = [], urls = [];
+  const root = h('div', { id: 'printroot' });
+  for (const { png, w, h: ht } of imgs) {
+    const k = `${w.toFixed(1)}x${ht.toFixed(1)}`; let n = sizes.get(k);
+    if (n == null) { n = sizes.size; sizes.set(k, n); css.push(`@page ps${n}{size:${w.toFixed(2)}pt ${ht.toFixed(2)}pt;margin:0}#printroot .pp${n}{page:ps${n};width:${w.toFixed(2)}pt;height:${ht.toFixed(2)}pt}`); }
+    const url = URL.createObjectURL(new Blob([png], { type: 'image/png' })); urls.push(url);
+    root.append(h('div', { class: 'pp' + n }, h('img', { src: url, alt: '' })));
+  }
+  const first = imgs[0]; // the default page takes the first page's size; others use named pages
+  const style = h('style', {}, `@page{size:${first.w.toFixed(2)}pt ${first.h.toFixed(2)}pt;margin:0}\n` + css.join('\n'));
+  document.head.append(style); document.body.append(root);
+  try { await Promise.all([...root.querySelectorAll('img')].map(i => i.decode().catch(() => {}))); } finally { b.done(); }
+  let cleaned = false;
+  const cleanup = () => { if (cleaned) return; cleaned = true; root.remove(); style.remove(); urls.forEach(u => URL.revokeObjectURL(u)); };
+  window.addEventListener('afterprint', () => setTimeout(cleanup, 500), { once: true });
+  window.print();
+  setTimeout(cleanup, 120000);
+}
+function printNow() {
+  if (!S.pages.length) return;
+  if (mode === 'kyc' && !$('#app').classList.contains('kv-view')) return;
+  printPages(S.pages);
+}
+
 async function exportSelected() {
   const pages = S.pages.filter(p => S.sel.has(p.uid)); if (!pages.length) { toast('Select pages in the sidebar first.'); return; }
   const path = await host.pickSave(defaultSavePath(defaultSaveName(`-pages`))); if (!path) return;
@@ -325,13 +380,20 @@ function fitScale() {
   const maxW = Math.max(1, ...S.pages.map(p => vpFor(p, 1).width));
   return Math.max(0.1, Math.min(6, cw / maxW));
 }
-const scaleNow = () => (S.zoom === 'fit' ? fitScale() : S.zoom * PT);
+function pageScale() {
+  const p = curPage() || S.pages[0]; if (!p) return 1; const v1 = vpFor(p, 1);
+  return Math.max(0.1, Math.min(6, (view.clientWidth - 48) / v1.width, (view.clientHeight - 44) / v1.height));
+}
+const scaleNow = () => (S.zoom === 'fit' ? fitScale() : S.zoom === 'page' ? pageScale() : S.zoom * PT);
+/** Form fields are typed into on the page in the PDF tab, so the page itself is drawn without them there. */
+const formMode = p => mode === 'pdf' && p.doc.fields.length > 0;
 function pvFor(p) {
   let v = pvs.get(p.uid);
   if (!v) {
-    const canvas = h('canvas'), stamps = h('div', { class: 'stamps' }), layer = h('div', { class: 'layer' });
-    const el = h('div', { class: 'pv', 'data-uid': p.uid }, canvas, stamps, layer, h('span', { class: 'pn' }));
-    v = { el, canvas, stamps, layer, vp: null, key: null, visible: false };
+    const canvas = h('canvas'), text = h('div', { class: 'textLayer' }), hits = h('div', { class: 'hits' }), links = h('div', { class: 'links' });
+    const forms = h('div', { class: 'forms' }), stamps = h('div', { class: 'stamps' }), layer = h('div', { class: 'layer' });
+    const el = h('div', { class: 'pv', 'data-uid': p.uid }, canvas, text, hits, links, forms, stamps, layer, h('span', { class: 'pn' }));
+    v = { el, canvas, text, hits, links, forms, stamps, layer, vp: null, key: null, tkey: null, tl: null, lkey: null, fkey: null, visible: false };
     pvs.set(p.uid, v); io.observe(el);
     el.addEventListener('contextmenu', e => pageMenu(e, p.uid));
   }
@@ -342,7 +404,7 @@ const io = new IntersectionObserver(entries => {
     const v = pvs.get(en.target.dataset.uid); if (!v) continue;
     v.visible = en.isIntersecting;
     if (v.visible) queueRender(en.target.dataset.uid);
-    else if (v.key) { v.canvas.width = v.canvas.height = 0; v.key = null; }
+    else if (v.key) { v.canvas.width = v.canvas.height = 0; v.key = null; v.tkey = v.lkey = null; v.tl = null; v.text.replaceChildren(); v.links.replaceChildren(); v.hits.replaceChildren(); }
   }
 }, { root: view, rootMargin: '900px 0px' });
 
@@ -356,7 +418,7 @@ function layoutView(keepAnchor = true) {
   for (const [u, v] of pvs) if (!live.has(u)) { io.unobserve(v.el); v.el.remove(); pvs.delete(u); }
   const els = S.pages.map((p, i) => {
     const v = pvFor(p); const vp = vpFor(p, scale); v.vp = vp;
-    v.el.style.width = vp.width + 'px'; v.el.style.height = vp.height + 'px';
+    v.el.style.width = vp.width + 'px'; v.el.style.height = vp.height + 'px'; v.el.style.setProperty('--scale-factor', vp.scale);
     v.el.classList.toggle('cur', p.uid === S.cur);
     $('.pn', v.el).textContent = String(i + 1);
     drawItems(p); drawStamps(p, i);
@@ -371,9 +433,9 @@ function layoutView(keepAnchor = true) {
     if (el) { view.scrollTop = el.offsetTop + anchor.ratio * el.offsetHeight; view.scrollLeft = el.offsetLeft + el.offsetWidth / 2 - view.clientWidth / 2; }
   }
   for (const p of S.pages) if (pvs.get(p.uid).visible) queueRender(p.uid);
-  $('#zLbl').textContent = S.zoom === 'fit' ? 'Fit' : Math.round(S.zoom * 100) + '%';
+  $('#zLbl').textContent = S.zoom === 'fit' ? 'Width' : S.zoom === 'page' ? 'Page' : Math.round(S.zoom * 100) + '%';
 }
-const renderKey = (p, scale) => `${scale.toFixed(4)}|${p.rot}|${DPR()}`;
+const renderKey = (p, scale) => `${scale.toFixed(4)}|${p.rot}|${DPR()}|${formMode(p) ? 'f' : 'a'}`;
 const rq = []; let rBusy = false;
 function queueRender(u) { if (!rq.includes(u)) rq.push(u); pumpRender(); }
 async function pumpRender() {
@@ -385,26 +447,28 @@ async function pumpRender() {
     try {
       const dpr = DPR(); const vp = vpFor(p, scale * dpr);
       const off = document.createElement('canvas'); off.width = Math.ceil(vp.width); off.height = Math.ceil(vp.height);
-      await p.doc.proxies[p.idx].render({ canvasContext: off.getContext('2d'), viewport: vp }).promise;
+      const annotationMode = formMode(p) ? pdfjsLib.AnnotationMode.ENABLE_FORMS : pdfjsLib.AnnotationMode.ENABLE;
+      await p.doc.proxies[p.idx].render({ canvasContext: off.getContext('2d'), viewport: vp, annotationMode }).promise;
       if (renderKey(p, scaleNow()) !== key) continue;
       v.canvas.width = off.width; v.canvas.height = off.height;
       v.canvas.style.width = vp.width / dpr + 'px'; v.canvas.style.height = vp.height / dpr + 'px';
       v.canvas.getContext('2d').drawImage(off, 0, 0); v.key = key;
+      renderTextLayer(p, v); drawLinks(p, v);
     } catch {}
   }
   rBusy = false;
 }
 function setZoom(z) {
-  S.zoom = z === 'fit' ? 'fit' : Math.max(0.25, Math.min(4, z));
+  S.zoom = z === 'fit' || z === 'page' ? z : Math.max(0.25, Math.min(4, z));
   layoutView(); updateChrome();
 }
 const zoomNow = () => scaleNow() / PT;
 const ZSTEPS = [0.25, 0.33, 0.5, 0.67, 0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4];
 const zoomStep = dir => { const z = zoomNow(); setZoom(dir > 0 ? ZSTEPS.find(s => s > z + 0.001) || 4 : [...ZSTEPS].reverse().find(s => s < z - 0.001) || 0.25); };
 $('#zIn').onclick = () => zoomStep(1); $('#zOut').onclick = () => zoomStep(-1);
-$('#zLbl').onclick = () => setZoom(S.zoom === 'fit' ? 1 : 'fit');
+$('#zLbl').onclick = () => setZoom(S.zoom === 'fit' ? 'page' : S.zoom === 'page' ? 1 : 'fit');
 view.addEventListener('wheel', e => { if (!e.ctrlKey) return; e.preventDefault(); zoomStep(e.deltaY < 0 ? 1 : -1); }, { passive: false });
-let rzT; new ResizeObserver(() => { clearTimeout(rzT); rzT = setTimeout(() => { if (S.zoom === 'fit') layoutView(); }, 120); }).observe(view);
+let rzT; new ResizeObserver(() => { clearTimeout(rzT); rzT = setTimeout(() => { if (S.zoom === 'fit' || S.zoom === 'page') layoutView(); }, 120); }).observe(view);
 
 function scrollToPage(u) { const v = pvs.get(u); if (v?.el.isConnected) view.scrollTop = v.el.offsetTop - 16; }
 let scT;
@@ -424,6 +488,130 @@ function setCur(u, scroll = true) {
   if (scroll) scrollToPage(u);
   if (S.itab === 'page' && !S.selItem) renderInsp();
   updateChrome();
+}
+
+// ---------------------------------------------------------------- text you can select, search and follow
+const textCache = new Map(), annCache = new Map();
+/** A page's text: pdf.js items plus one searchable string with each item's offset. */
+function textOf(p) {
+  const k = p.doc.id + ':' + p.idx; let t = textCache.get(k);
+  if (!t) {
+    t = p.doc.proxies[p.idx].getTextContent().then(tc => {
+      const items = tc.items.filter(i => i.str !== undefined); let str = ''; const starts = [];
+      for (const it of items) { starts.push(str.length); str += it.str; if (it.hasEOL) str += ' '; }
+      const r = { tc, lower: str.toLowerCase(), starts, lens: items.map(i => i.str.length) }; t.res = r; return r;
+    });
+    textCache.set(k, t);
+  }
+  return t;
+}
+async function renderTextLayer(p, v) {
+  const key = v.key; if (!key || v.tkey === key) return; v.tkey = key;
+  let t; try { t = await textOf(p); } catch { return; }
+  if (v.tkey !== key || !v.visible) return;
+  const box = h('div', { class: 'textLayer' });
+  const tl = new pdfjsLib.TextLayer({ textContentSource: t.tc, container: box, viewport: v.vp });
+  try { await tl.render(); } catch { return; }
+  if (v.tkey !== key || !v.visible) return;
+  box.append(h('div', { class: 'endOfContent' }));
+  v.text.replaceWith(box); v.text = box; v.tl = tl;
+  drawHits(p);
+}
+document.addEventListener('pointerdown', e => { const tl = e.target.closest?.('.textLayer'); if (tl) tl.classList.add('selecting'); });
+document.addEventListener('pointerup', () => $$('.textLayer.selecting').forEach(t => t.classList.remove('selecting')));
+
+function linksOf(p) {
+  const k = p.doc.id + ':' + p.idx; let a = annCache.get(k);
+  if (!a) { a = p.doc.proxies[p.idx].getAnnotations({ intent: 'display' }).then(as => as.filter(x => x.subtype === 'Link' && (x.url || x.dest))).catch(() => []); annCache.set(k, a); }
+  return a;
+}
+async function drawLinks(p, v) {
+  const key = v.key; if (!key || v.lkey === key) return; v.lkey = key;
+  const ls = await linksOf(p); if (v.lkey !== key || !v.vp) return;
+  v.links.replaceChildren(...ls.map(l => {
+    const [x1, y1, x2, y2] = v.vp.convertToViewportRectangle(l.rect);
+    const a = h('a', { class: 'lk', href: '#', title: l.url || '', style: `left:${Math.min(x1, x2)}px;top:${Math.min(y1, y2)}px;width:${Math.abs(x2 - x1)}px;height:${Math.abs(y2 - y1)}px` });
+    a.addEventListener('click', e => { e.preventDefault(); followLink(p.doc, l); });
+    return a;
+  }));
+}
+async function followLink(d, l) {
+  if (l.url) { if (!(await host.openUrl(l.url).catch(() => false))) toast('Only web and email links open from Proof.'); return; }
+  try {
+    const dest = typeof l.dest === 'string' ? await d.pdf.getDestination(l.dest) : l.dest; const ref = dest?.[0];
+    const idx = ref && typeof ref === 'object' ? await d.pdf.getPageIndex(ref) : Number.isInteger(ref) ? ref : -1;
+    const tp = S.pages.find(q => q.doc === d && q.idx === idx);
+    if (tp) setCur(tp.uid, true);
+  } catch {}
+}
+
+// Find (Ctrl+F)
+const FIND = { el: null, inp: null, cnt: null, q: '', hits: [], i: -1, t: null };
+function openFind() {
+  if (!S.pages.length) return;
+  if (!FIND.el) {
+    const inp = h('input', { type: 'text', 'aria-label': 'Find in document', spellcheck: 'false' });
+    FIND.cnt = h('span', { class: 'fcnt', 'aria-live': 'polite' });
+    FIND.el = h('div', { class: 'findbar', role: 'search' }, inp, FIND.cnt,
+      h('button', { class: 'tbtn icon', title: 'Previous (Shift+Enter)', 'aria-label': 'Previous match', onclick: () => stepFind(-1) }, '↑'),
+      h('button', { class: 'tbtn icon', title: 'Next (Enter)', 'aria-label': 'Next match', onclick: () => stepFind(1) }, '↓'),
+      h('button', { class: 'tbtn icon', title: 'Close (Esc)', 'aria-label': 'Close', onclick: closeFind }, '×'));
+    FIND.inp = inp;
+    inp.addEventListener('input', () => { clearTimeout(FIND.t); FIND.t = setTimeout(() => runFind(inp.value), 180); });
+    inp.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); clearTimeout(FIND.t); FIND.q === inp.value && FIND.hits.length ? stepFind(e.shiftKey ? -1 : 1) : runFind(inp.value); }
+      else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeFind(); }
+    });
+    document.body.append(FIND.el);
+  }
+  const r = view.getBoundingClientRect();
+  FIND.el.style.top = r.top + 10 + 'px'; FIND.el.style.right = innerWidth - r.right + 18 + 'px';
+  FIND.el.hidden = false; FIND.inp.focus(); FIND.inp.select();
+}
+function closeFind() {
+  if (!FIND.el || FIND.el.hidden) return;
+  FIND.el.hidden = true; FIND.hits = []; FIND.i = -1; FIND.q = ''; drawAllHits(); view.focus({ preventScroll: true });
+}
+async function runFind(q) {
+  FIND.q = q; const ql = q.trim().toLowerCase(); const hits = [];
+  if (ql) for (const p of S.pages) {
+    let t; try { t = await textOf(p); } catch { continue; }
+    for (let i = t.lower.indexOf(ql); i >= 0; i = t.lower.indexOf(ql, i + ql.length)) hits.push({ u: p.uid, a: i, b: i + ql.length });
+  }
+  if (FIND.q !== q) return;
+  FIND.hits = hits;
+  const ci = Math.max(0, S.pages.indexOf(curPage()));
+  FIND.i = hits.length ? Math.max(0, hits.findIndex(x => S.pages.indexOf(byUid(x.u)) >= ci)) : -1;
+  findCount(); drawAllHits(); if (FIND.i >= 0) showHit();
+}
+function stepFind(d) { const n = FIND.hits.length; if (!n) return; FIND.i = (FIND.i + d + n) % n; findCount(); drawAllHits(); showHit(); }
+function findCount() { FIND.cnt.textContent = FIND.q.trim() ? (FIND.hits.length ? `${FIND.i + 1} of ${FIND.hits.length}` : 'No matches') : ''; }
+async function showHit() {
+  const hit = FIND.hits[FIND.i]; const p = hit && byUid(hit.u); if (!p) return;
+  const v = pvs.get(p.uid); if (!v) return;
+  if (S.cur !== p.uid) setCur(p.uid, false);
+  if (!v.tl || !v.visible) scrollToPage(p.uid);
+  for (let n = 0; n < 80 && !(v.tl && v.tkey === v.key && v.key); n++) await new Promise(r => setTimeout(r, 40));
+  if (FIND.hits[FIND.i] !== hit) return;
+  drawHits(p);
+  const el = v.hits.querySelector('.hit.cur'); if (!el) return;
+  view.scrollTop = v.el.offsetTop + el.offsetTop - view.clientHeight * 0.35;
+  const x = v.el.offsetLeft + el.offsetLeft; if (x < view.scrollLeft || x > view.scrollLeft + view.clientWidth - 40) view.scrollLeft = x - 60;
+}
+function drawAllHits() { for (const p of S.pages) drawHits(p); }
+function drawHits(p) {
+  const v = pvs.get(p.uid); if (!v) return; v.hits.replaceChildren();
+  const mine = FIND.hits.map((x, k) => [x, k]).filter(([x]) => x.u === p.uid); if (!mine.length || !v.tl) return;
+  const t = textCache.get(p.doc.id + ':' + p.idx)?.res; if (!t) return;
+  const pr = v.el.getBoundingClientRect(), range = document.createRange(), divs = v.tl.textDivs;
+  for (const [x, k] of mine) {
+    for (let j = 0; j < t.starts.length; j++) {
+      const a = t.starts[j], len = t.lens[j]; if (a >= x.b) break; if (a + len <= x.a || !len) continue;
+      const node = divs[j]?.firstChild; if (!node) continue;
+      range.setStart(node, Math.max(0, x.a - a)); range.setEnd(node, Math.min(len, x.b - a));
+      for (const r of range.getClientRects()) v.hits.append(h('div', { class: 'hit' + (k === FIND.i ? ' cur' : ''), style: `left:${r.left - pr.left}px;top:${r.top - pr.top}px;width:${r.width}px;height:${r.height}px` }));
+    }
+  }
 }
 
 function drawStamps(p, i = S.pages.indexOf(p)) {
@@ -446,10 +634,14 @@ function positionEl(it, el, vp) {
   el.style.transform = `rotate(${(vp.rotation - it.theta + 360) % 360}deg)`;
 }
 function drawItems(p) {
-  const v = pvs.get(p.uid); if (!v?.vp) return; v.layer.replaceChildren();
+  const v = pvs.get(p.uid); if (!v?.vp) return;
+  const ae = document.activeElement;
+  const keep = ae?.classList?.contains('ted') && v.layer.contains(ae) ? { id: ae.closest('.it').dataset.id, a: ae.selectionStart, b: ae.selectionEnd } : null;
+  v.layer.replaceChildren();
   for (const it of p.items) {
     let el;
-    if (it.type === 'text') { el = h('div', { class: 'it text' + (it.text ? '' : ' empty') + (kycHooks.itemClass?.(it) || ''), style: `color:${it.color}` }); el.textContent = it.text; }
+    if (it.type === 'text' && S.selItem?.id === it.id && mode === 'pdf' && !it.kyc) el = textEditor(p, it);
+    else if (it.type === 'text') { el = h('div', { class: 'it text' + (it.text ? '' : ' empty') + (kycHooks.itemClass?.(it) || ''), style: `color:${it.color}` }); el.textContent = it.text; }
     else if (it.type === 'rect') el = h('div', { class: 'it rect', style: `background:${it.color}` });
     else if (it.type === 'redact') el = h('div', { class: 'it redact', title: 'Redaction: removed when you save' });
     else el = h('div', { class: 'it img' }, h('img', { src: it.src, alt: '' }));
@@ -457,10 +649,95 @@ function drawItems(p) {
     if (S.selItem?.id === it.id) { el.classList.add('on'); if (it.type !== 'text') el.append(h('i', { class: 'grip', 'data-grip': '1' })); }
     positionEl(it, el, v.vp); v.layer.append(el);
   }
-  kycHooks.marks?.(p, v);
+  if (keep) { const ta = v.layer.querySelector(`.it[data-id="${keep.id}"] .ted`); if (ta) { ta.focus({ preventScroll: true }); try { ta.setSelectionRange(keep.a, keep.b); } catch {} } }
+  if (mode === 'kyc') { if (v.forms.firstChild) v.forms.replaceChildren(); v.fkey = null; kycHooks.marks?.(p, v); }
+  else drawFields(p, v);
+}
+/** A selected text box: typed into where it sits. Its frame is the handle for moving it. */
+function textEditor(p, it) {
+  const ta = h('textarea', { class: 'ted', rows: '1', wrap: 'off', spellcheck: 'false', placeholder: 'Text', 'aria-label': 'Text' });
+  ta.value = it.text; armUndo(ta);
+  const el = h('div', { class: 'it text edit' + (it.text ? '' : ' empty'), style: `color:${it.color}` }, h('i', { class: 'mv', title: 'Drag to move' }), ta);
+  ta.addEventListener('input', () => {
+    setItemText(it, ta.value); const v = pvs.get(p.uid); if (v?.vp) positionEl(it, el, v.vp);
+    el.classList.toggle('empty', !it.text); thumbSoon(p); updateChrome();
+  });
+  return el;
+}
+/** Change a text item's text, keeping its first line where it is when lines are added or removed. */
+function setItemText(it, text) {
+  const n0 = lineCount(it); it.text = text; const n1 = lineCount(it);
+  if (n1 !== n0) { const dH = (n1 - n0) * it.size * 1.2, th = (it.theta * Math.PI) / 180; it.x += dH * Math.sin(th); it.y -= dH * Math.cos(th); }
+}
+let thumbT = null;
+function thumbSoon(p) { clearTimeout(thumbT); thumbT = setTimeout(() => updateThumb(p), 400); }
+
+const fieldVal = (d, f) => (f.name in d.values ? d.values[f.name] : f.value);
+function drawFields(p, v) {
+  const d = p.doc, vp = v.vp;
+  if (!formMode(p)) { if (v.forms.firstChild) v.forms.replaceChildren(); v.fkey = null; return; }
+  const key = `${vp.scale}|${vp.rotation}`;
+  if (v.fkey === key) { syncFields(v, d); return; }
+  const ae = document.activeElement, refocus = ae && v.forms.contains(ae) ? ae.dataset.k : null;
+  v.fkey = key; const els = [];
+  for (const f of d.fields) (f.widgets || []).forEach((w, wi) => {
+    if (w.page !== p.idx) return;
+    const [x, y, wd, ht] = w.rect;
+    const a = vp.convertToViewportPoint(x, y), b = vp.convertToViewportPoint(x + wd, y + ht);
+    const L = Math.min(a[0], b[0]), T = Math.min(a[1], b[1]), W = Math.abs(a[0] - b[0]), H = Math.abs(a[1] - b[1]);
+    if (W < 3 || H < 3) return;
+    const el = fieldControl(d, f, wi, W, H, vp.scale);
+    el.dataset.k = f.name + '\u0000' + wi; el.dataset.name = f.name; el.dataset.wi = wi;
+    el.style.left = L + 'px'; el.style.top = T + 'px'; el.style.width = W + 'px'; el.style.height = H + 'px';
+    els.push(el);
+  });
+  v.forms.replaceChildren(...els);
+  if (refocus) [...v.forms.children].find(e => e.dataset.k === refocus)?.focus({ preventScroll: true });
+}
+function fieldControl(d, f, wi, W, H, sc) {
+  const cur = fieldVal(d, f); let el;
+  const set = val => {
+    d.values[f.name] = val;
+    for (const q of S.pages) if (q.doc === d) { const qv = pvs.get(q.uid); if (qv?.forms.firstChild) syncFields(qv, d); }
+    updateChrome();
+  };
+  const label = f.name;
+  if (f.kind === 'check') {
+    el = h('input', { type: 'checkbox', class: 'ff box', disabled: f.ro, 'aria-label': label });
+    el.checked = !!cur; el.style.fontSize = Math.min(W, H) * 0.85 + 'px';
+    el.addEventListener('change', () => set(el.checked));
+  } else if (f.kind === 'radio') {
+    el = h('input', { type: 'radio', class: 'ff box', name: d.id + ':' + f.name, disabled: f.ro, 'aria-label': `${label}: ${f.options[wi] ?? ''}` });
+    el.checked = cur !== '' && f.options[wi] === cur; el.style.fontSize = Math.min(W, H) * 0.55 + 'px';
+    el.addEventListener('change', () => { if (el.checked) set(f.options[wi]); });
+  } else if (f.kind === 'select') {
+    el = h('select', { class: 'ff', disabled: f.ro, 'aria-label': label }, h('option', { value: '' }, ''), f.options.map(o => h('option', { value: o }, o)));
+    el.value = cur || ''; el.style.fontSize = Math.min(H * 0.62, 11 * sc) + 'px';
+    el.addEventListener('change', () => set(el.value));
+  } else {
+    el = f.multi ? h('textarea', { class: 'ff', disabled: f.ro, spellcheck: 'false', 'aria-label': label }) : h('input', { type: 'text', class: 'ff', disabled: f.ro, spellcheck: 'false', 'aria-label': label });
+    if (f.maxLen) el.maxLength = f.maxLen;
+    el.value = cur || ''; el.style.fontSize = (f.multi ? Math.min(10 * sc, H * 0.5) : Math.min(H * 0.66, 11 * sc)) + 'px';
+    el.addEventListener('input', () => set(el.value));
+  }
+  armUndo(el);
+  return el;
+}
+/** Show the current values in a page's fields (after undo, a fill, or a change made elsewhere). */
+function syncFields(v, d) {
+  const byName = new Map(d.fields.map(f => [f.name, f]));
+  for (const el of v.forms.children) {
+    if (el === document.activeElement) continue;
+    const f = byName.get(el.dataset.name); if (!f) continue; const cur = fieldVal(d, f);
+    if (f.kind === 'check') el.checked = !!cur;
+    else if (f.kind === 'radio') el.checked = cur !== '' && f.options[+el.dataset.wi] === cur;
+    else el.value = cur || '';
+  }
 }
 function selectItem(u, id) {
   const prev = S.selItem; S.selItem = id ? { uid: u, id } : null;
+  // A text box left empty disappears, as in any editor.
+  if (prev && prev.id !== id) { const pp = byUid(prev.uid), pit = pp?.items.find(i => i.id === prev.id); if (pit?.type === 'text' && !pit.text.trim() && !pit.kyc) { pp.items = pp.items.filter(i => i !== pit); drawItems(pp); updateThumb(pp); updateChrome(); } }
   if (prev && prev.uid !== u) { const pp = byUid(prev.uid); if (pp) drawItems(pp); }
   const p = byUid(u); if (p) drawItems(p);
   if (id) { if (u !== S.cur) setCur(u, false); S.itab = 'page'; renderTabs(); if (p?.items.find(i => i.id === id)?.kyc) kycHooks.itemSelected?.(id); }
@@ -507,9 +784,12 @@ function placeCentered(src, aspect) {
 }
 
 let drag = null;
+function focusText(id) { const ta = $(`.it[data-id="${id}"] .ted`); if (ta) { ta.focus({ preventScroll: true }); ta.setSelectionRange(ta.value.length, ta.value.length); } }
 pagesEl.addEventListener('pointerdown', e => {
   if (e.button !== 0) return;
+  if (e.target.closest('.ted')) return; // placing the caret in a text box being typed
   const pvEl = e.target.closest('.pv'); if (!pvEl) return;
+  if (S.tool === 'select' && e.target.closest('.ff, .lk')) { if (S.selItem) selectItem(null, null); return; }
   const p = byUid(pvEl.dataset.uid), v = pvs.get(p.uid), vp = v.vp;
   const r = v.layer.getBoundingClientRect(); const cx = e.clientX - r.left, cy = e.clientY - r.top;
   const el = e.target.closest('.it');
@@ -528,11 +808,13 @@ pagesEl.addEventListener('pointerdown', e => {
   if (S.tool === 'text' || S.tool === 'date') {
     const isDate = S.tool === 'date', size = isDate ? 11 : 14;
     const [x, y] = vp.convertToPdfPoint(cx, cy + size * 1.2 * vp.scale);
-    addItem(p, { type: 'text', x, y, text: isDate ? today() : '', size, color: '#111111' });
-    if (!isDate) setTimeout(() => $('#insp-text')?.focus(), 30);
+    e.preventDefault();
+    const it = addItem(p, { type: 'text', x, y, text: isDate ? today() : '', size, color: '#111111' });
+    if (!isDate) setTimeout(() => focusText(it.id), 0);
     return;
   }
   if (S.tool === 'cover' || S.tool === 'redact') {
+    e.preventDefault();
     const w = 150, ht = 22; const [x, y] = vp.convertToPdfPoint(cx, cy + ht * vp.scale);
     addItem(p, S.tool === 'cover' ? { type: 'rect', x, y, w, h: ht, color: '#000000' } : { type: 'redact', x, y, w, h: ht });
     return;
@@ -551,7 +833,11 @@ pagesEl.addEventListener('pointermove', e => {
   }
   positionEl(it, drag.el, vp);
 });
-const endDrag = () => { if (drag && !drag.pend) { updateThumb(drag.p); renderInsp(); } drag = null; };
+const endDrag = () => {
+  if (drag && !drag.pend) { updateThumb(drag.p); renderInsp(); }
+  else if (drag?.it.type === 'text' && mode === 'pdf') focusText(drag.it.id); // a click without a move: start typing
+  drag = null;
+};
 pagesEl.addEventListener('pointerup', endDrag); pagesEl.addEventListener('pointercancel', endDrag);
 function nudge(dx, dy) {
   const { p, it } = findItem(); if (!it) return; const v = pvs.get(p.uid);
@@ -682,7 +968,7 @@ let menuEl = null;
 function closeMenu() { menuEl?.remove(); menuEl = null; $$('[aria-expanded="true"]').forEach(b => b.setAttribute('aria-expanded', 'false')); }
 function showMenu(x, y, items, opener) {
   closeMenu();
-  menuEl = h('div', { class: 'menu', role: 'menu' }, items.map(it => it === '-' ? h('hr') :
+  menuEl = h('div', { class: 'menu', role: 'menu' }, items.filter(Boolean).map(it => it === '-' ? h('hr') :
     h('button', { role: 'menuitem', class: it.danger ? 'danger' : null, disabled: it.disabled, onclick: () => { closeMenu(); it.action(); } }, h('span', {}, it.label), it.kbd ? h('kbd', {}, it.kbd) : null)));
   document.body.append(menuEl);
   const r = menuEl.getBoundingClientRect();
@@ -709,6 +995,7 @@ function pageMenu(e, u) {
     { label: `Move ${s} to start`, action: () => movePages(list, 'start') },
     { label: `Move ${s} to end`, action: () => movePages(list, 'end') },
     { label: `Extract ${s} to PDF…`, action: () => { S.sel = new Set(list.map(p => p.uid)); updateSel(); exportSelected(); } },
+    { label: `Print ${s}…`, action: () => printPages(list) },
     '-',
     { label: `Delete ${s}`, kbd: 'Del', danger: true, action: () => deletePages(list) },
   ]);
@@ -716,6 +1003,9 @@ function pageMenu(e, u) {
 $('#bExport').onclick = e => {
   const r = e.currentTarget.getBoundingClientRect();
   showMenu(r.left, r.bottom + 2, [
+    { label: 'Print…', kbd: 'Ctrl+P', disabled: !S.pages.length, action: printNow },
+    S.sel.size ? { label: `Print selected pages… (${S.sel.size})`, action: () => printPages(S.pages.filter(p => S.sel.has(p.uid))) } : null,
+    '-',
     { label: `Selected pages as PDF… (${S.sel.size})`, disabled: !S.sel.size, action: exportSelected },
     { label: 'One PDF per page…', disabled: !S.pages.length, action: exportSplit },
     { label: S.sel.size ? `Selected pages as PNG… (${S.sel.size})` : 'All pages as PNG…', disabled: !S.pages.length, action: exportPng },
@@ -735,7 +1025,7 @@ function paperName(wmm, hmm) { const [a, b] = [Math.min(wmm, hmm), Math.max(wmm,
 function renderInsp() {
   const body = $('#ibody'); const top = body.scrollTop; body.replaceChildren();
   if (!S.pages.length) { body.append(sec(null, h('p', { class: 'hint' }, 'No document open.'))); return; }
-  ({ page: inspPage, form: inspForm, stamps: inspStamps, doc: inspDoc })[S.itab](body);
+  (({ page: inspPage, stamps: inspStamps, doc: inspDoc })[S.itab] || inspPage)(body);
   body.scrollTop = top;
 }
 function inspPage(body) {
@@ -747,12 +1037,9 @@ function inspPage(body) {
     const names = { text: 'Text', rect: 'Cover box', redact: 'Redaction', img: 'Image' };
     const s = sec(names[it.type]);
     if (it.type === 'text') {
-      const ta = h('textarea', { id: 'insp-text', rows: '4', placeholder: 'Type here' }); ta.value = it.text; armUndo(ta);
-      ta.addEventListener('input', () => { it.text = ta.value; redraw(); updateThumb(ip); });
       const sz = h('input', { id: 'insp-size', type: 'number', min: '5', max: '96', step: '1', value: it.size }); armUndo(sz);
       sz.addEventListener('input', () => { const n = +sz.value; if (n >= 5 && n <= 96) { it.size = n; redraw(); } });
-      s.append(h('label', { class: 'fld', for: 'insp-text' }, h('span', { class: 'lbl' }, 'Text'), ta),
-        h('div', { class: 'fline' }, h('label', { class: 'fld', for: 'insp-size' }, h('span', { class: 'lbl' }, 'Size pt'), sz),
+      s.append(h('div', { class: 'fline' }, h('label', { class: 'fld', for: 'insp-size' }, h('span', { class: 'lbl' }, 'Size pt'), sz),
           h('div', { class: 'fld' }, h('span', { class: 'lbl' }, 'Color'), swatchRow(it.color, [['#111111', 'Black'], ['#1F3FBF', 'Blue'], ['#C0172F', 'Red']], recolor))));
     } else if (it.type === 'rect') {
       s.append(h('div', { class: 'fld' }, h('span', { class: 'lbl' }, 'Fill'), swatchRow(it.color, [['#000000', 'Black'], ['#FFFFFF', 'White']], recolor)),
@@ -788,42 +1075,6 @@ function inspPage(body) {
   const toolName = $(`#tools [data-t="${S.tool}"]`).firstChild.textContent;
   if (TOOL_HINT[S.tool]) body.append(sec(toolName, h('p', { class: 'hint' }, TOOL_HINT[S.tool])));
 }
-function inspForm(body) {
-  const docs = visDocs().filter(d => !d.hidden); const any = docs.some(d => d.fields.length);
-  const filling = formSection(body, docs);
-  const out = filling ? h('details', { class: 'more' }, h('summary', {}, 'All fields and options')) : body;
-  if (filling) body.append(out);
-  const flat = h('input', { type: 'checkbox', id: 'f-flat', checked: S.opts.flatten });
-  flat.onchange = () => { S.opts.flatten = flat.checked; markDirty(); };
-  out.append(sec('Answers',
-    h('div', { class: 'btns' }, h('button', { class: 'btn', disabled: !any, onclick: loadAnswers }, 'Load answers…'), h('button', { class: 'btn', disabled: !any, onclick: saveAnswers }, 'Save answers…')),
-    any ? h('label', { class: 'opt', for: 'f-flat' }, flat, h('div', {}, 'Flatten when saving', h('small', {}, 'Combined and redacted files are always flattened.'))) : null));
-  for (const d of docs) {
-    const s = sec(null, h('div', { class: 'file' }, h('i', { style: `background:var(${d.color})` }), h('b', { class: 'nm' }, d.name), h('span', { class: 'pp' }, `${d.fields.length} fields`)));
-    if (!d.fields.length) s.append(h('p', { class: 'hint' }, d.xfa ? 'XFA form with no standard fields.' : 'No fillable fields.'));
-    else {
-      if (d.xfa) s.append(h('p', { class: 'hint' }, 'XFA form. The XFA layer is removed on save.'));
-      d.fields.forEach((f, i) => {
-        const cur = f.name in d.values ? d.values[f.name] : f.value; const fid = `f-${d.id}-${i}`;
-        const row = h('div', { class: 'frow' + (f.name in d.values ? ' changed' : '') });
-        const set = v => { d.values[f.name] = v; row.classList.add('changed'); updateChrome(); redrawDoc(d); };
-        let ctl;
-        if (f.kind === 'check') {
-          ctl = h('input', { type: 'checkbox', id: fid, disabled: f.ro }); ctl.checked = !!cur; ctl.addEventListener('change', () => set(ctl.checked));
-          row.append(h('label', { class: 'chk', for: fid }, ctl, f.name));
-        } else if (f.kind === 'select' || f.kind === 'radio') {
-          ctl = h('select', { id: fid, disabled: f.ro }, h('option', { value: '' }, '—'), f.options.map(o => h('option', { value: o }, o))); ctl.value = cur || ''; ctl.addEventListener('change', () => set(ctl.value));
-          row.append(h('label', { class: 'lbl', for: fid }, f.name), ctl);
-        } else {
-          ctl = f.multi ? h('textarea', { id: fid, rows: '3', disabled: f.ro }) : h('input', { type: 'text', id: fid, disabled: f.ro }); ctl.value = cur || ''; ctl.addEventListener('input', () => set(ctl.value));
-          row.append(h('label', { class: 'lbl', for: fid }, f.name + (f.ro ? ' (read-only)' : '')), ctl);
-        }
-        armUndo(ctl); s.append(row);
-      });
-    }
-    out.append(s);
-  }
-}
 async function saveAnswers() {
   const fields = {}; for (const d of visDocs()) for (const f of d.fields) fields[f.name] = f.name in d.values ? d.values[f.name] : f.value;
   const base = (visDocs().find(d => d.fields.length)?.name || 'form').replace(/\.pdf$/i, '');
@@ -849,7 +1100,7 @@ async function loadAnswers() {
     if (f.kind === 'check') v = !!v; else if (f.options && !f.options.includes(v)) continue; else v = v == null ? '' : String(v);
     d.values[f.name] = v; n++;
   }
-  renderInsp(); updateChrome(); toast(n ? `Filled ${n} field${n > 1 ? 's' : ''} from ${entry.name}.` : 'None of the saved field names match this form.');
+  renderAll(); toast(n ? `Filled ${n} field${n > 1 ? 's' : ''} from ${entry.name}.` : 'None of the saved field names match this form.');
 }
 function inspStamps(body) {
   const st = S.stamps;
@@ -864,14 +1115,14 @@ function inspStamps(body) {
   const wmO = h('select', { id: 'st-wo', 'aria-label': 'Strength' }, [[0.08, 'Faint'], [0.15, 'Light'], [0.3, 'Strong']].map(([k, l]) => h('option', { value: k }, l))); wmO.value = String(st.wm.opacity); bind(wmO, el => (st.wm.opacity = +el.value));
   body.append(
     sec('Stamps', h('p', { class: 'hint' }, 'Header and footer accept {page}, {pages} and {date}.')),
-    sec(null, h('label', { class: 'lbl', for: 'st-h' }, 'Header'), txt('st-h', st.header, 'text', 'Confidential · {date}'), slotSel('st-hs', st.header)),
-    sec(null, h('label', { class: 'lbl', for: 'st-f' }, 'Footer'), txt('st-f', st.footer, 'text', 'Case 2026-114'), slotSel('st-fs', st.footer)),
+    sec(null, h('label', { class: 'lbl', for: 'st-h' }, 'Header'), txt('st-h', st.header, 'text'), slotSel('st-hs', st.header)),
+    sec(null, h('label', { class: 'lbl', for: 'st-f' }, 'Footer'), txt('st-f', st.footer, 'text'), slotSel('st-fs', st.footer)),
     sec(null, h('label', { class: 'lbl', for: 'st-n' }, 'Page numbers'), h('div', { class: 'fline' }, nf, h('span', { class: 'lbl' }, 'from'), numIn('st-n0', st.num, 'start', 1, 0, 'Start at')), slotSel('st-ns', st.num)),
     sec(null, h('label', { class: 'opt', for: 'st-b' }, bOn, h('div', {}, 'Bates numbers', h('small', {}, 'Prefix + zero-padded number'))),
-      h('div', { class: 'fline' }, txt('st-bp', st.bates, 'prefix', 'Prefix')),
+      h('div', { class: 'fline' }, h('label', { class: 'lbl', for: 'st-bp' }, 'Prefix'), txt('st-bp', st.bates, 'prefix')),
       h('div', { class: 'fline' }, h('span', { class: 'lbl' }, 'from'), numIn('st-b0', st.bates, 'start', 1, 0, 'Start at'), h('span', { class: 'lbl' }, 'digits'), numIn('st-bd', st.bates, 'digits', 6, 1, 'Digits')),
       slotSel('st-bs', st.bates)),
-    sec(null, h('label', { class: 'lbl', for: 'st-w' }, 'Watermark'), h('div', { class: 'fline' }, txt('st-w', st.wm, 'text', 'DRAFT'), wmO)),
+    sec(null, h('label', { class: 'lbl', for: 'st-w' }, 'Watermark'), h('div', { class: 'fline' }, txt('st-w', st.wm, 'text'), wmO)),
     sec(null, h('div', { class: 'btns' }, h('button', { class: 'btn quiet', disabled: !stampsActive(), onclick: () => { commit(); S.stamps = defaultStamps(); changed(); renderInsp(); } }, 'Clear all stamps'))));
 }
 function inspDoc(body) {
@@ -882,13 +1133,22 @@ function inspDoc(body) {
     h('button', { class: 'x', title: 'Remove this file’s pages', 'aria-label': 'Remove ' + d.name, onclick: () => removeDoc(d) }, '×'))),
     h('div', { class: 'btns' }, h('button', { class: 'btn', onclick: async () => insertEntries(await host.pickOpen()) }, 'Insert file…'))));
   const rev = h('input', { type: 'checkbox', id: 'd-rev', checked: true });
-  const scope = S.sel.size >= 2 ? `the ${S.sel.size} selected pages` : `all ${S.pages.length} pages`;
   body.append(sec('Arrange',
-    h('p', { class: 'hint' }, `Applies to ${scope}.`),
+    h('p', { class: 'hint' }, S.sel.size >= 2 ? `Applies to the ${S.sel.size} selected pages.` : 'Applies to all pages.'),
     h('div', { class: 'btns' }, h('button', { class: 'btn', disabled: S.pages.length < 2, onclick: reversePages }, 'Reverse order')),
     h('p', { class: 'hint' }, 'Interleave fronts and backs from a one-sided scan.'),
     h('label', { class: 'opt', for: 'd-rev' }, rev, h('div', {}, 'Backs are in reverse order')),
     h('div', { class: 'btns' }, h('button', { class: 'btn', disabled: S.pages.length < 2, onclick: () => collatePages(rev.checked) }, 'Collate scan'))));
+  const fdocs = docs.filter(d => d.fields.length);
+  if (fdocs.length) {
+    const flat = h('input', { type: 'checkbox', id: 'f-flat', checked: S.opts.flatten });
+    flat.onchange = () => { S.opts.flatten = flat.checked; markDirty(); };
+    const n = fdocs.reduce((a, d) => a + d.fields.length, 0);
+    body.append(sec('Form',
+      h('p', { class: 'hint' }, `${n} field${n === 1 ? '' : 's'}${fdocs.some(d => d.xfa) ? ' · XFA layer removed on save' : ''}`),
+      h('div', { class: 'btns' }, h('button', { class: 'btn', onclick: loadAnswers }, 'Load answers…'), h('button', { class: 'btn', onclick: saveAnswers }, 'Save answers…')),
+      h('label', { class: 'opt', for: 'f-flat' }, flat, h('div', {}, 'Flatten when saving', h('small', {}, 'Combined and redacted files are always flattened.')))));
+  }
   const strip = h('input', { type: 'checkbox', id: 'd-strip', checked: S.opts.strip }); strip.onchange = () => { S.opts.strip = strip.checked; markDirty(); };
   const comp = h('input', { type: 'checkbox', id: 'd-comp', checked: S.opts.compress }); comp.onchange = () => { S.opts.compress = comp.checked; markDirty(); };
   const pw = h('input', { type: 'password', id: 'd-pw', autocomplete: 'new-password', placeholder: 'No password' }); pw.value = S.opts.password;
@@ -986,14 +1246,41 @@ function renderEmpty() {
       h('button', { class: 'btn primary', onclick: doOpen }, 'Open a PDF')),
     h('p', { class: 'lbl' }, 'Or drop files here'),
     recent.length ? h('div', { class: 'fld' }, h('span', { class: 'lbl' }, 'Recent'),
-      h('div', { class: 'recent' }, recent.map(p => h('button', { title: p, onclick: () => openPaths([p], 'open') }, h('b', {}, host.baseName(p)), h('span', {}, host.dirName(p)))))) : null));
+      h('div', { class: 'recent' }, recent.map(p => h('button', { title: p, onclick: () => openPaths([p], 'open') }, h('b', {}, host.baseName(p)), h('span', {}, host.dirName(p)))))) : null,
+    h('p', { class: 'foot' }, h('button', { class: 'lnk', onclick: showShortcuts }, 'Keyboard shortcuts'), ` · Proof ${version}`)));
+}
+
+// ---------------------------------------------------------------- keyboard shortcuts (F1)
+const SHORTCUTS = [
+  ['File', [['Ctrl+O', 'Open'], ['Ctrl+I', 'Insert file'], ['Ctrl+S', 'Save'], ['Ctrl+Shift+S', 'Save as'], ['Ctrl+P', 'Print'], ['Ctrl+W', 'Close']]],
+  ['Edit', [['Ctrl+Z', 'Undo'], ['Ctrl+Y', 'Redo'], ['Del', 'Delete selection'], ['Ctrl+A', 'Select all pages'], ['Ctrl+R', 'Rotate right'], ['Ctrl+Shift+R', 'Rotate left'], ['Arrows', 'Nudge (Shift: ×10)'], ['Esc', 'Finish / deselect']]],
+  ['Tools', [['V', 'Select'], ['T', 'Text'], ['D', 'Date'], ['C', 'Cover'], ['R', 'Redact'], ['I', 'Image'], ['S', 'Sign']]],
+  ['View', [['Ctrl+F', 'Find'], ['Ctrl+G', 'Go to page'], ['PgUp / PgDn', 'Previous / next page'], ['Home / End', 'First / last page'], ['Ctrl+= / Ctrl+−', 'Zoom'], ['Ctrl+0', 'Fit page'], ['Ctrl+1', '100%'], ['Ctrl+2', 'Fit width'], ['F1', 'This list']]],
+];
+function showShortcuts() {
+  if ($('.scrim')) return;
+  const m = modal('Keyboard shortcuts', h('div', { class: 'keys' }, SHORTCUTS.map(([g, list]) => h('section', {}, h('h3', {}, g), h('dl', {}, list.flatMap(([k, l]) => [h('dt', {}, h('kbd', {}, k)), h('dd', {}, l)]))))),
+    h('div', { class: 'actions' }, h('span', { class: 'ver' }, `Proof ${version}`), h('button', { class: 'btn primary', onclick: () => m.close() }, 'Close')));
+}
+
+// ---------------------------------------------------------------- go to page (Ctrl+G, or click the page number)
+function editPage() {
+  if (!S.pages.length) return;
+  const sp = $('#stPage'), n = S.pages.length;
+  const inp = h('input', { type: 'number', class: 'pgin', min: '1', max: String(n), value: String(pageNo(curPage()) || 1), 'aria-label': 'Go to page' });
+  let fin = false;
+  const done = go => { if (fin) return; fin = true; const k = parseInt(inp.value, 10); inp.remove(); if (go && k >= 1 && k <= n) setCur(S.pages[k - 1].uid, true); updateChrome(); };
+  inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); done(true); view.focus({ preventScroll: true }); } else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); done(false); } });
+  inp.addEventListener('blur', () => done(false));
+  sp.replaceChildren('Page ', inp, ` of ${n}`); inp.focus(); inp.select();
 }
 
 // ---------------------------------------------------------------- chrome
 function updateChrome() {
   setDocMode();
   const n = S.pages.length, c = curPage();
-  $('#stPage').textContent = n ? `Page ${c ? pageNo(c) : 1} of ${n}` : 'No document';
+  const sp = $('#stPage');
+  if (!sp.querySelector('input')) sp.replaceChildren(n ? h('button', { class: 'pgbtn', title: 'Go to page (Ctrl+G)', onclick: editPage }, `Page ${c ? pageNo(c) : 1} of ${n}`) : 'No document');
   const files = visDocs().filter(d => !d.hidden).length, ed = editCount();
   $('#stInfo').textContent = n ? [`${files} file${files === 1 ? '' : 's'}`, ed ? `${ed} edit${ed === 1 ? '' : 's'}` : null, S.sel.size > 1 ? `${S.sel.size} selected` : null, stampsActive() ? 'Stamps on' : null, S.opts.password ? 'Password on save' : null].filter(Boolean).join(' · ') : '';
   const st = $('#stState'); st.textContent = n ? (S.dirty ? 'Unsaved changes' : 'Saved') : ''; st.className = S.dirty ? 'dirty' : '';
@@ -1001,7 +1288,6 @@ function updateChrome() {
   $('#bUndo').disabled = !S.undo.length; $('#bRedo').disabled = !S.redo.length;
   for (const id of ['#bSave', '#bSaveAs', '#bExport', '#bInsert']) $(id).disabled = !n;
   $$('#tools button').forEach(b => (b.disabled = !n));
-  $('#cFields').textContent = visDocs().reduce((a, d) => a + d.fields.length, 0) || '';
   $('#cStamps').textContent = stampsActive() ? '●' : '';
   host.setTitle(n ? `${S.dirty ? '● ' : ''}${S.title || 'Untitled'} — Proof` : 'Proof');
 }
@@ -1018,7 +1304,7 @@ function setMode(m) {
   $('#app').classList.toggle('m-kyc', mode === 'kyc');
   $$('.modes button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.m === mode)));
   try { localStorage.setItem(MODE_KEY, mode); } catch {}
-  if (mode === 'pdf') setTool('select');
+  if (mode === 'pdf') setTool('select'); else { closeFind(); if (S.selItem) selectItem(null, null); }
   kycHooks.layout?.();
   kycHooks.show?.();
   layoutView(); renderInsp(); updateChrome();
@@ -1080,8 +1366,17 @@ const kycText = {
 initKyc({ S, h, sec, modal, toast, busy, commit: () => commit(), renderInsp, updateChrome, insertEntries, openEntries, placeText, hooks: kycHooks, redrawDoc, revealRect, text: kycText, setTab: t => { S.itab = t; renderTabs(); renderInsp(); }, setMode, mode: () => mode, save: () => save(false), saveCopy: suffix => save(true, suffix), closeDoc, relayout: () => layoutView() });
 
 document.addEventListener('keydown', e => {
-  // Keep webview browser shortcuts (reload, print the app UI, find bar) from firing in a desktop app.
-  if (e.key === 'F5' || ((e.ctrlKey || e.metaKey) && ['p', 'f', 'g', 'u', 'j'].includes(e.key.toLowerCase()))) { e.preventDefault(); return; }
+  // Webview shortcuts (reload, browser find, print the app UI…) are replaced by the app's own.
+  const bk = e.key.toLowerCase();
+  if (e.key === 'F5' || e.key === 'F1' || ((e.ctrlKey || e.metaKey) && ['p', 'f', 'g', 'u', 'j'].includes(bk))) {
+    e.preventDefault();
+    if ($('.scrim') || $('.busy')) return;
+    if (e.key === 'F1') showShortcuts();
+    else if (bk === 'p') printNow();
+    else if (bk === 'f' && mode === 'pdf') openFind();
+    else if (bk === 'g' && mode === 'pdf') editPage();
+    return;
+  }
   if ($('.scrim') || $('.busy')) return;
   // In the KYC workspace only document shortcuts apply, and zoom/undo only while a PDF form is on screen.
   if (mode === 'kyc' && !(e.ctrlKey || e.metaKey)) return;
@@ -1095,8 +1390,9 @@ document.addEventListener('keydown', e => {
     if (k === 's') { e.preventDefault(); mode === 'kyc' ? kycHooks.saveForm?.() : save(e.shiftKey); return; }
     if (k === '=' || k === '+') { e.preventDefault(); zoomStep(1); return; }
     if (k === '-') { e.preventDefault(); zoomStep(-1); return; }
-    if (k === '0') { e.preventDefault(); setZoom('fit'); return; }
+    if (k === '0') { e.preventDefault(); setZoom('page'); return; }
     if (k === '1') { e.preventDefault(); setZoom(1); return; }
+    if (k === '2') { e.preventDefault(); setZoom('fit'); return; }
     if (typing()) return;
     if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); return; }
     if ((k === 'z' && e.shiftKey) || k === 'y') { e.preventDefault(); redo(); return; }
@@ -1104,9 +1400,11 @@ document.addEventListener('keydown', e => {
     if (k === 'r') { e.preventDefault(); rotatePages(targetPages(), e.shiftKey ? -90 : 90); return; }
     return;
   }
+  if (e.key === 'Escape' && typing()) { document.activeElement.blur(); if (S.selItem) selectItem(null, null); return; }
   if (typing()) return;
+  if (e.key === '?') { e.preventDefault(); showShortcuts(); return; }
   if (e.key === 'Escape') { if (S.selItem) selectItem(null, null); else if (S.tool !== 'select') setTool('select'); else if (S.sel.size) { S.sel.clear(); updateSel(); } return; }
-  if (e.key === 'Delete' || e.key === 'Backspace') {
+  if (e.key === 'Delete' || (e.key === 'Backspace' && S.selItem)) {
     e.preventDefault();
     if (S.selItem) deleteItem(); else if (S.sel.size) deletePages(targetPages());
     return;
@@ -1121,12 +1419,13 @@ document.addEventListener('keydown', e => {
     e.preventDefault(); const i = pageNo(curPage()) - 1 + (e.key === 'PageDown' ? 1 : -1);
     const p = S.pages[Math.max(0, Math.min(S.pages.length - 1, i))]; setCur(p.uid, true);
   }
+  if ((e.key === 'Home' || e.key === 'End') && S.pages.length) { e.preventDefault(); setCur(S.pages[e.key === 'Home' ? 0 : S.pages.length - 1].uid, true); }
 });
 
 // ---------------------------------------------------------------- startup
 let dropEl = null;
-host.onDrop(entries => { if (!entries.length) return; if (mode === 'kyc') return kycHooks.drop?.(entries); S.pages.length ? insertEntries(entries) : openEntries(entries); },
-  on => { if (on && !dropEl) { dropEl = h('div', { class: 'dropover' }, h('span', {}, S.pages.length ? 'Drop to insert' : 'Drop to open')); document.body.append(dropEl); } else if (!on) { dropEl?.remove(); dropEl = null; } });
+host.onDrop(entries => { if (!entries.length || $('.scrim') || $('.busy')) return; if (mode === 'kyc') return kycHooks.drop?.(entries); openOrInsert(entries); },
+  on => { if (on && !dropEl) { dropEl = h('div', { class: 'dropover' }, h('span', {}, 'Drop to open')); document.body.append(dropEl); } else if (!on) { dropEl?.remove(); dropEl = null; } });
 const closeHandler = async () => {
   if (!S.dirty) return true;
   const r = await askUnsaved('closing');

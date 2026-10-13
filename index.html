@@ -14,7 +14,7 @@
       <button role="tab" data-m="kyc" aria-selected="false">KYC</button>
     </nav>
     <div class="grp pdf-only">
-      <button class="tbtn" id="bOpen" title="Open a PDF (Ctrl+O)">Open</button>
+      <button class="tbtn" id="bOpen" title="Open (Ctrl+O)">Open</button>
       <button class="tbtn doc-only" id="bInsert" title="Insert pages from another file (Ctrl+I)">Insert file</button>
       <button class="tbtn doc-only" id="bSave" title="Save (Ctrl+S)">Save</button>
       <button class="tbtn doc-only" id="bSaveAs" title="Save as (Ctrl+Shift+S)">Save as</button>
@@ -41,7 +41,7 @@
     </div>
     <div class="grp zoom doc-only view-only">
       <button class="tbtn icon" id="zOut" title="Zoom out (Ctrl+−)" aria-label="Zoom out"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10"/></svg></button>
-      <button class="tbtn zl" id="zLbl" title="Fit width (Ctrl+0) · 100% (Ctrl+1)">Fit</button>
+      <button class="tbtn zl" id="zLbl" title="Fit width (Ctrl+2) · Fit page (Ctrl+0) · 100% (Ctrl+1)">Width</button>
       <button class="tbtn icon" id="zIn" title="Zoom in (Ctrl+=)" aria-label="Zoom in"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10M8 3v10"/></svg></button>
     </div>
   </header>
@@ -60,7 +60,6 @@
     <aside class="insp doc-only pdf-only" aria-label="Inspector">
       <nav class="itabs" role="tablist">
         <button role="tab" data-i="page" aria-selected="true">Page</button>
-        <button role="tab" data-i="form" aria-selected="false">Form<sup id="cFields"></sup></button>
         <button role="tab" data-i="stamps" aria-selected="false">Stamps<sup id="cStamps"></sup></button>
         <button role="tab" data-i="doc" aria-selected="false">Document</button>
       </nav>

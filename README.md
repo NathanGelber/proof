@@ -4,7 +4,12 @@ A small Windows PDF workbench: combine, reorder, rotate, split and extract pages
 
 - **UI:** Tauri 2 (WebView2) with plain JS, bundled by Vite. The page itself has no network access (its Content-Security-Policy only allows the app's own files and IPC).
 - **Engines:** pdf.js renders, pdf-lib assembles, MuPDF (WASM) unlocks, redacts, compresses and encrypts.
-- **Text you add** uses the system's Arial, so non-Latin scripts work.
+- **Text you add** uses the system's Arial, so non-Latin scripts work. It's typed straight onto the page, and becomes part of the page when you save.
+- **Forms** are filled on the page; Document → Form loads or saves answers and flattens.
+- **Reading:** select and copy text, Ctrl+F to find, Ctrl+G to go to a page, links in the PDF work (web and email links open in the default app; nothing else is opened).
+- **Print** (Ctrl+P, Export → Print, or right-click pages) prints what's on screen, edits included, at actual size, as 300 dpi images through the Windows print dialog.
+- **Signed PDFs:** saving rewrites the file and breaks a digital signature, so Proof says so first and offers to save a copy.
+- **F1** lists the keyboard shortcuts.
 
 ## KYC tab
 
@@ -22,6 +27,7 @@ How the data is kept apart from the matching:
 - **Matching.** In order: saved forms (a form you filled before), the label library (wording you've confirmed, learned from every fill and seeded with **KYC → Label library → Learn from forms…**), then built-in phrase lists (`src/kyc/match.js`). The optional Claude step only gets what's left. It runs in the Rust backend (`src-tauri/src/matcher.rs`), the only code that can reach the network, and sends only each answer spot's label text plus the *names* of profile items, never values: no file name, letterhead, instructions or surrounding lines. The request types reject unknown fields; emails, URLs, phone and account numbers, dates and long numbers are masked; the counterparty's name and anything matching the unlocked profile are cut (`src-tauri/src/scrub.rs`). **What gets sent?** in the review shows the exact request.
 - **API key.** Stored in Windows Credential Manager by the backend; the page can set it but never read it.
 - **Saved signature.** Kept in the encrypted profile. Older versions stored it in the window's storage; it's moved in and wiped the first time the profile is unlocked.
+- **Links.** Only http, https and mailto links can be opened (the opener plugin's scope in `src-tauri/capabilities/default.json`).
 - **Files.** The backend only reads PDFs, images, Word, Excel and JSON, and only writes PDFs, PNGs, Word, Excel and JSON, with ordinary full paths. Programs, scripts, shortcuts, device paths and hidden streams are refused. Profile files must end in .vault.
 - **Locking.** The backend locks the profile after 15 minutes without use on its own timer and tells the window, which drops the decrypted copy. New passphrases need 12+ characters and can't be trivially guessable.
 - **Fill record.** KYC → Settings → Fill record sets how long records are kept; older ones are deleted on unlock.

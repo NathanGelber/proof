@@ -15,7 +15,8 @@ if (isDesktop) {
   ]);
 }
 
-const OPEN_FILTERS = [{ name: 'PDFs, images, Word and Excel forms', extensions: ['pdf', 'png', 'jpg', 'jpeg', 'docx', 'xlsx', 'docm', 'xlsm'] }];
+const PDF_EXT = ['pdf', 'png', 'jpg', 'jpeg'], OFFICE_EXT = ['docx', 'xlsx', 'docm', 'xlsm'];
+const openFilters = office => [{ name: office ? 'PDFs, Word and Excel forms' : 'PDFs and images', extensions: office ? [...PDF_EXT, ...OFFICE_EXT] : PDF_EXT }];
 export const baseName = p => p.split(/[\\/]/).pop();
 export const dirName = p => { const i = Math.max(p.lastIndexOf('\\'), p.lastIndexOf('/')); return i > 0 ? p.slice(0, i) : ''; };
 export const joinPath = (dir, name) => dir + (dir.includes('\\') ? '\\' : '/') + name;
@@ -27,15 +28,15 @@ export async function readPath(path) {
 }
 
 /** Let the person choose files to open. Resolves [{name, path, type, bytes}] (empty when cancelled). */
-export async function pickOpen({ multiple = true, title } = {}) {
+export async function pickOpen({ multiple = true, title, office = false } = {}) {
   if (isDesktop) {
-    let res = await dialog.open({ multiple, title, filters: OPEN_FILTERS });
+    let res = await dialog.open({ multiple, title, filters: openFilters(office) });
     if (!res) return [];
     const paths = Array.isArray(res) ? res : [res];
     return Promise.all(paths.map(async path => ({ name: baseName(path), path, type: mimeOf(path), bytes: await readPath(path) })));
   }
   return new Promise(resolve => {
-    const inp = Object.assign(document.createElement('input'), { type: 'file', multiple, accept: 'application/pdf,.pdf,image/png,image/jpeg,.docx,.xlsx,.docm,.xlsm' });
+    const inp = Object.assign(document.createElement('input'), { type: 'file', multiple, accept: 'application/pdf,.pdf,image/png,image/jpeg' + (office ? ',.docx,.xlsx,.docm,.xlsm' : '') });
     inp.onchange = async () => resolve(await Promise.all([...inp.files].map(fileEntry)));
     inp.oncancel = () => resolve([]);
     inp.click();
@@ -133,3 +134,11 @@ export function addRecent(path) {
   try { const list = recentFiles().filter(p => p !== path); list.unshift(path); localStorage.setItem(RECENT, JSON.stringify(list.slice(0, 8))); } catch {}
 }
 export function forgetRecent(path) { try { localStorage.setItem(RECENT, JSON.stringify(recentFiles().filter(p => p !== path))); } catch {} }
+
+/** Open a web or mail link from a document in the default browser or mail app. Other schemes are refused. */
+export async function openUrl(url) {
+  if (!/^(https?:\/\/|mailto:)/i.test(url)) return false;
+  if (isDesktop) { const { openUrl: open } = await import('@tauri-apps/plugin-opener'); await open(url); }
+  else window.open(url, '_blank', 'noopener');
+  return true;
+}
