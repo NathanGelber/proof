@@ -11,6 +11,7 @@ import { localFields, claudeMatch, libLabel, libKey, isQuestionLine, lineLabel }
 import { initFill, endFill, fillKind, fillName, drawFill, fillNow } from './fill.js';
 import { harvestForm, initHarvest } from './harvest.js';
 import { dateInput } from './datefield.js';
+import { initPacket, createPacket } from './packet.js';
 import { prepare, pdfjsLib } from '../engine.js';
 
 let C; // context from main.js
@@ -39,7 +40,7 @@ export function initKyc(ctx) {
     C.toast('Couldn’t save the profile: ' + errMsg(e), 8000);
   });
   onChange(() => { const st = document.querySelector('#kycnav .kstate'); if (st) st.textContent = K.dirty ? 'Saving…' : ''; });
-  initFill(C); initHarvest(C);
+  initFill(C); initHarvest(C); initPacket(C);
   C.hooks.layout = () => { if (layoutKyc() && C.mode() === 'kyc') { drawNav(); if (view.sec === 'form' && !fillKind()) drawPane(); } };
   C.hooks.show = () => renderKyc();
   refreshInfo().catch(() => {}).finally(() => renderKyc());
@@ -204,6 +205,8 @@ function homeView(ent) {
     h('h2', {}, 'Fill a form'),
     drop,
     doc ? h('div', { class: 'kcard' }, h('div', {}, h('b', {}, doc.name)), h('button', { class: 'btn primary', onclick: () => fillNow(false) }, 'Fill')) : null,
+    h('div', { class: 'kblock2' }, h('h3', {}, 'Send our own information sheet'),
+      h('div', { class: 'btns' }, h('button', { class: 'btn', disabled: !ent, onclick: () => createPacket(ent) }, 'Create KYC packet…'))),
     h('div', { class: 'kblock2' }, h('h3', {}, 'Import from a filled form'),
       h('div', { class: 'btns' }, h('button', { class: filled < 8 ? 'btn primary' : 'btn', onclick: () => harvestForm(ent) }, 'Choose file…'))),
     recent.length ? h('div', { class: 'kblock2' }, h('h3', {}, 'Recently filled'),
@@ -344,13 +347,13 @@ function deleteEntity(ent) {
 
 // ---- people
 const PERSON_GROUPS = [
-  ['Identity', ['full_name', 'first_name', 'last_name', 'position', 'date_of_birth', 'place_of_birth', 'country_of_birth', 'nationality']],
+  ['Identity', ['full_name', 'first_name', 'middle_name', 'last_name', 'position', 'date_of_birth', 'place_of_birth', 'country_of_birth', 'nationality', 'nationality_2']],
   ['Company details', ['full_name', 'reg_number', 'inc_country', 'position']],
   ['Address', ['res_street', 'res_postcode', 'res_city', 'res_country', 'res_address']],
   ['Ownership and control', ['ownership_pct', 'control']],
   ['Political exposure', ['pep', 'pep_details']],
   ['Identity document', ['id_type', 'id_number', 'id_country', 'id_issued', 'id_expiry']],
-  ['Tax', ['tax_country', 'tin']],
+  ['Tax', ['tax_country', 'tin', 'tax_country_2', 'tin_2', 'tax_country_3', 'tin_3']],
   ['Contact', ['email', 'phone']],
 ];
 const personName = p => (p.values.full_name?.v || [p.values.first_name?.v, p.values.last_name?.v].filter(Boolean).join(' ') || 'Unnamed');

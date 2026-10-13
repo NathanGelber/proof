@@ -37,10 +37,13 @@ function pickOption(options, value, kind, map) {
  */
 export function render(ent, key, as, field) {
   as = as || '';
+  // "!" in front: the question is worded the other way round, so a yes/no answer is flipped.
+  const flip = as.startsWith('!'); if (flip) as = as.slice(1);
   if (as.startsWith('literal:')) { const t = as.slice(8); return { value: field?.kind === 'check' ? isYes(t) : t, show: t }; }
   const def = keyDef(ent, key); if (!def) return { missing: true, problem: 'Unknown item', show: '' };
-  const raw = rawValue(ent, key);
+  let raw = rawValue(ent, key);
   const kind = def.kind;
+  if (flip && kind === 'bool' && raw !== '' && raw != null) raw = isYes(raw) ? 'no' : 'yes';
   const fk = field?.kind || 'text';
   if (raw === '' || raw == null) return { missing: true, show: '', value: fk === 'check' ? false : '' };
   if (fk === 'check' || as.startsWith('check')) {
@@ -95,6 +98,24 @@ export function roleIn(...texts) {
   }
   return null;
 }
+/** "Country of tax residence 2", "second TIN": which of a numbered series a label means (1 when it doesn't say). */
+const SERIES = { tax_country: 3, tin: 3 };
+function seriesNo(...texts) {
+  for (const raw of texts) {
+    const t = norm(raw); if (!t) continue;
+    if (/\b(second|2nd|tweede)\b/.test(t)) return 2;
+    if (/\b(third|3rd|derde)\b/.test(t)) return 3;
+    const m = /(?:^|\D)([23])\s*$/.exec(t); if (m) return +m[1];
+  }
+  return 1;
+}
+/** A yes/no question asked the other way round: "different from", "none of", "not". */
+export function reversedQ(text) {
+  let t = String(text || '').replace(/\([^)]*\)/g, ' ').replace(/\[[^\]]*\]/g, ' '); // definitions in brackets don't count
+  t = ' ' + norm(t) + ' ';
+  t = t.replace(/\b(yes|ja|y)\s*(or\s*)?(no|nee|n)\b/g, ' ').replace(/\b(if|when|indien) (no|not|yes|so|nee|ja)\b.*$/, ' ');
+  return /\b(not|none|never|neither|nor|non|different|differs|other than|no longer|niet|geen)\b/.test(t) || /\bno (pep|politically|sanction|nominee|bearer|shell|us |u s )/.test(t);
+}
 function trailingNumber(...texts) { for (const t of texts) { const m = /(?:^|\D)(\d{1,2})\s*$/.exec(norm(t)); if (m && +m[1] < 20) return +m[1]; } return 0; }
 
 // Words that don't change what a label asks for.
@@ -143,7 +164,9 @@ export function learn(label, key, as, kind) {
   if (!K.P || !key || (as || '').startsWith('literal:')) return;
   const k = libKey(label); if (!k || k.length > 160 || k.split(' ').length > 25) return;
   const m = /^[a-z_]+\.\d+\.([a-z0-9_]+)$/.exec(key);
-  const item = m ? 'person:' + m[1] : key;
+  // Numbered series are learned as their first item; the number comes from the label each time.
+  const base = k2 => k2.replace(/^(tax_country|tin)_[23]$/, '$1');
+  const item = m ? 'person:' + base(m[1]) : base(key);
   const L = (K.P.library ||= {}); const old = L[k];
   const keepAs = kind === 'check' ? as : undefined;
   L[k] = { key: item, ...(keepAs ? { as: keepAs } : {}), n: old && old.key === item ? (old.n || 0) + 1 : 1, at: new Date().toISOString().slice(0, 10) };
@@ -214,11 +237,13 @@ export function localFields(ent, fields) {
     }
     const d = pick.c;
     let key = d.key;
+    const sn = SERIES[d.key] ? seriesNo(f.tip, f.left, f.above, nice) : 1;
+    if (sn > 1 && sn <= SERIES[d.key]) key = d.key + '_' + sn;
     if (d.scope === 'person') {
       const role = ctx?.role || 'director';
-      let n = ctx?.n || trailingNumber(nice, f.left, f.tip) || 0;
+      let n = ctx?.n || (sn > 1 ? 0 : trailingNumber(nice, f.left, f.tip)) || 0;
       if (!n) { const blk = role + '|' + f.section; roleCount[role] ||= { blocks: [] }; if (!roleCount[role].blocks.includes(blk)) roleCount[role].blocks.push(blk); n = roleCount[role].blocks.indexOf(blk) + 1; }
-      key = `${role}.${n}.${d.key}`;
+      key = `${role}.${n}.${key}`;
       if (!ctx) note = 'Assumed this is about a director. Check which person it means.';
     }
     if (!as) {
@@ -256,11 +281,13 @@ export function localLines(ent, lines) {
     const b = fitsScope(libPick(libLookup(m ? m[1] : l.text), E, Pk), ctx?.office ? null : ctx) || bestKey([[label, 1]], cands);
     if (!b || (!b.lib && b.score < 14)) continue;
     let key = b.c.key;
+    const sn = SERIES[key] ? seriesNo(m ? m[1] : l.text) : 1;
+    if (sn > 1 && sn <= SERIES[key]) key += '_' + sn;
     if (b.c.scope === 'person') {
       const role = ctx?.role || 'director';
       let n = ctx?.n || 0;
       if (!n) { (blocks[role] ||= []); if (!blocks[role].includes(section)) blocks[role].push(section); n = blocks[role].indexOf(section) + 1; }
-      key = `${role}.${n}.${b.c.key}`;
+      key = `${role}.${n}.${key}`;
     }
     if (b.c.kind === 'bool' && /\b(yes|ja|oui)\b/i.test(l.text) && /\b(no|nee|non)\b/i.test(l.text)) {
       out.push({ id: l.id, key, as: 'check:any', place: 'mark', option: '@yesno', confidence: b.exact ? 'medium' : 'low', note: '', source: 'local' });

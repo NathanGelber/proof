@@ -115,13 +115,22 @@ fn write_file(request: Request) -> Result<(), String> {
 
 /// A Unicode TrueType font for text Proof adds to pages. Empty when none is found.
 #[tauri::command]
-fn system_font() -> Response {
-    let candidates = [
-        "C:\\Windows\\Fonts\\arial.ttf",
-        "C:\\Windows\\Fonts\\segoeui.ttf",
-        "/System/Library/Fonts/Supplemental/Arial.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    ];
+fn system_font(bold: Option<bool>) -> Response {
+    let candidates: &[&str] = if bold.unwrap_or(false) {
+        &[
+            "C:\\Windows\\Fonts\\arialbd.ttf",
+            "C:\\Windows\\Fonts\\segoeuib.ttf",
+            "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        ]
+    } else {
+        &[
+            "C:\\Windows\\Fonts\\arial.ttf",
+            "C:\\Windows\\Fonts\\segoeui.ttf",
+            "/System/Library/Fonts/Supplemental/Arial.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        ]
+    };
     for c in candidates {
         if let Ok(b) = std::fs::read(c) {
             return Response::new(b);

@@ -18,7 +18,7 @@ import { readDate } from './datefield.js';
 import { K, V, persist, setValue, rawValue, peopleIn, todayIso, refreshInfo, errKind, errMsg } from './vault.js';
 import { pageLines, describeFields, flatLines, fingerprint, sha256 } from './extract.js';
 import { loadOffice, isOfficeName } from './office.js';
-import { localFields, localLines, claudeMatch, claudeRequest, render, placeOnLine, yesNoOption, learn, libLabel, isQuestionLine, lineLabel, fieldLabel, autoAs } from './match.js';
+import { localFields, localLines, claudeMatch, claudeRequest, render, placeOnLine, yesNoOption, learn, libLabel, isQuestionLine, lineLabel, fieldLabel, autoAs, reversedQ } from './match.js';
 import { ensureUnlocked, curEntity, setCurEntity, openProfile, attachDocs, showForm, renderKyc } from './ui.js';
 
 let C = null;
@@ -194,8 +194,17 @@ function evaluate(it) {
   it.missing = !!r.missing; it.value = r.value; it.show = r.show || ''; it.problem = r.problem || '';
 }
 
+/** The question text around a spot, for spotting yes/no questions asked the other way round. */
+const questionOf = it => { const f = fieldOf(it); return [f.tip, f.left, f.above, f.text, it.label].filter(Boolean).join(' '); };
+function markReversed(it) {
+  if (!it.key || it.key === TYPED || (it.as || '').startsWith('!') || it.source === 'saved') return;
+  if (keyDef(SES.ent, it.key)?.kind !== 'bool' || !reversedQ(questionOf(it))) return;
+  it.as = '!' + (it.as || ''); it.note = 'Asked the other way round, so the answer is flipped. Check it.';
+}
+
 /** Where a freshly matched item starts: filled and green, filled and amber, or listed. */
 function settle(it) {
+  markReversed(it);
   evaluate(it);
   if (!it.key || it.na) it.status = 'empty';
   else if (it.missing) it.status = 'missing';
@@ -223,7 +232,8 @@ function applyFlat(it, want) {
   if (it.place === 'mark') {
     // Re-place a tick every time: which box gets it depends on the value.
     remove();
-    const opt = it.option === '@yesno' ? yesNoOption(line, rawValue(SES.ent, it.key)) : it.option;
+    let raw = rawValue(SES.ent, it.key); if ((it.as || '').startsWith('!') && raw) raw = /^(yes|y|true)$/i.test(raw) ? 'no' : 'yes';
+    const opt = it.option === '@yesno' ? yesNoOption(line, raw) : it.option;
     const pos = it.pos || (opt && line.segs ? placeOnLine(line, { ...it, option: opt }, null) : null);
     if (!pos) return;
     it.itemId = C.text.place(SES.doc, [{ page: line.page - 1, x: pos.x, y: pos.y, size: pos.size, text: 'X', kyc: true }])[0];
@@ -310,8 +320,9 @@ function choose(it, key) {
   it.key = key; it.touched = true; it.conf = 'you'; it.source = 'you'; it.note = '';
   if (SES.kind === 'flat') { if (!it.place) it.place = 'right'; if (!it.label) it.label = lineLabel(it.target.text || ''); }
   it.as = autoAs(SES.ent, key, fieldOf(it));
+  markReversed(it);
   evaluate(it);
-  it.status = it.missing ? 'missing' : it.problem ? 'check' : 'ok';
+  it.status = it.missing ? 'missing' : it.problem || it.note ? 'check' : 'ok';
   SES.picking = null; apply(it); refresh();
 }
 

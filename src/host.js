@@ -81,11 +81,13 @@ export async function writePath(path, bytes) {
 }
 export const folderJoin = (folder, name) => folder.startsWith('download:') ? 'download:' + name : joinPath(folder, name);
 
-let fontP = null;
 /** A Unicode TrueType font from the system (Arial on Windows), or null. */
-export function systemFont() {
-  if (!fontP) fontP = isDesktop ? core.invoke('system_font').then(b => (b && b.byteLength ? new Uint8Array(b) : null)).catch(() => null) : Promise.resolve(null);
-  return fontP;
+const fontPs = {};
+/** The system's Arial (or Segoe UI), regular or bold, for text written into PDFs. null when there is none. */
+export function systemFont(bold = false) {
+  const k = bold ? 'b' : 'r';
+  if (!fontPs[k]) fontPs[k] = isDesktop ? core.invoke('system_font', { bold }).then(b => (b && b.byteLength ? new Uint8Array(b) : null)).catch(() => null) : Promise.resolve(null);
+  return fontPs[k];
 }
 
 export async function launchFiles() { return isDesktop ? core.invoke('launch_files') : []; }
