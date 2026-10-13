@@ -32,6 +32,7 @@ export const ENTITY_KEYS = [
   k('reg_city', 'Registered address: city', 'text', ['city', 'town', 'place', 'plaats', 'woonplaats', 'vestigingsplaats', 'stadt', 'ville'], { group: 'address' }),
   k('reg_country', 'Registered address: country', 'country', ['country', 'land'], { group: 'address' }),
   k('reg_address', 'Registered address (one line)', 'computed', ['registered address', 'registered office', 'registered office address', 'statutory address', 'statutair adres', 'statutaire zetel', 'registered seat', 'address of registered office', 'address'], { group: 'address', from: ['reg_street', 'reg_postcode', 'reg_city', 'reg_country'] }),
+  k('op_same', 'Business address is the same as the registered address', 'bool', ['business address same as registered address', 'same as registered address', 'is the business address the same as the registered address', 'principal place of business same as registered office', 'operating address same as registered address'], { group: 'address' }),
   k('op_street', 'Business address: street and number', 'text', ['business address street', 'principal place of business street'], { group: 'address' }),
   k('op_postcode', 'Business address: postcode', 'text', [], { group: 'address' }),
   k('op_city', 'Business address: city', 'text', [], { group: 'address' }),

@@ -14,6 +14,7 @@
 import * as host from '../host.js';
 import { ROLES, SPECIAL_KEYS, ENUM_KINDS, entityKeys, personKeys, keyDef, keyLabel, roleInfo } from './schema.js';
 import { COUNTRIES } from './countries.js';
+import { readDate } from './datefield.js';
 import { K, V, persist, setValue, rawValue, peopleIn, todayIso, refreshInfo, errKind, errMsg } from './vault.js';
 import { pageLines, describeFields, flatLines, fingerprint, sha256 } from './extract.js';
 import { loadOffice, isOfficeName } from './office.js';
@@ -480,7 +481,7 @@ function panel() {
 
 function valueInput(def, onSet) {
   const { h } = C; let el;
-  if (def.kind === 'date') el = h('input', { type: 'date' });
+  if (def.kind === 'date') el = h('input', { type: 'text', inputmode: 'numeric', placeholder: 'DD-MM-YYYY', spellcheck: 'false', autocomplete: 'off' });
   else if (def.kind === 'country') el = h('select', {}, h('option', { value: '' }, 'Choose…'), COUNTRIES.map(([c, , n]) => h('option', { value: c }, n)));
   else if (def.kind === 'bool') el = h('select', {}, h('option', { value: '' }, 'Choose…'), h('option', { value: 'yes' }, 'Yes'), h('option', { value: 'no' }, 'No'));
   else if (def.kind === 'choice') el = h('select', {}, h('option', { value: '' }, 'Choose…'), def.choices.map(c => h('option', { value: c }, c)));
@@ -489,7 +490,11 @@ function valueInput(def, onSet) {
   el.setAttribute('aria-label', def.label);
   // Saved when you leave the field (Tab, Enter, or clicking elsewhere); the next missing one gets the cursor.
   let done = false;
-  const go = () => { if (done) return; const v = (el.value || '').trim(); if (!v) return; done = true; onSet(v); };
+  const go = () => {
+    if (done) return; let v = (el.value || '').trim(); if (!v) return;
+    if (def.kind === 'date') { v = readDate(v); if (!v) { el.classList.add('bad'); return; } }
+    done = true; onSet(v);
+  };
   el.addEventListener('change', go);
   el.addEventListener('keydown', e => {
     if (e.key === 'Enter' && (el.tagName !== 'TEXTAREA' || e.ctrlKey)) { e.preventDefault(); go(); }

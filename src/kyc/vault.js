@@ -128,6 +128,8 @@ export function rawValue(ent, key) {
   let bag;
   if (d.scope === 'person') { const p = peopleIn(ent, d.role)[d.n - 1]; if (!p) return ''; bag = p.values; }
   else bag = ent.values;
+  // "Same as registered": the business address is the registered one.
+  if (d.scope !== 'person' && /^op_(street|postcode|city|country|address)$/.test(d.key) && ent.values.op_same?.v === 'yes') return rawValue(ent, d.key.replace(/^op_/, 'reg_'));
   const own = bag[d.key]?.v;
   if (d.kind === 'computed') return own || computed(d, bag, ent);
   return own ?? '';

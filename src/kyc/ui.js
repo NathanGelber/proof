@@ -10,6 +10,7 @@ import { loadOffice, isOfficeName } from './office.js';
 import { localFields, claudeMatch, libLabel, libKey, isQuestionLine, lineLabel } from './match.js';
 import { initFill, endFill, fillKind, fillName, drawFill, fillNow } from './fill.js';
 import { harvestForm, initHarvest } from './harvest.js';
+import { dateInput } from './datefield.js';
 import { prepare, pdfjsLib } from '../engine.js';
 
 let C; // context from main.js
@@ -45,7 +46,7 @@ export function initKyc(ctx) {
   document.getElementById('kycpane')?.addEventListener('pointerdown', touch);
   document.getElementById('kycnav')?.addEventListener('pointerdown', touch);
   host.onEvent('vault-locked', () => { if (K.P) afterLock('Profile locked after 15 minutes without use.'); });
-  if (!host.isDesktop) import('./schema.js').then(schema => (window.__kyc = { K, V, setValue, flush, schema }));
+  if (!host.isDesktop) import('./schema.js').then(schema => (window.__kyc = { K, V, setValue, flush, schema, rawValue }));
 }
 
 async function conflict() {
@@ -283,9 +284,10 @@ function editor(bag, def, ent, onSet) {
   const { h } = C; const cur = bag[def.key]?.v ?? '';
   const id = 'kv-' + def.key + '-' + Math.random().toString(36).slice(2, 7);
   let ctl;
-  const set = v => { if (setValue(bag, def, v)) { meta.replaceWith(metaFor()); onSet?.(); } };
+  // A change refreshes the one-line previews of computed items in place; redrawing would lose the cursor.
+  const set = v => { if (setValue(bag, def, v)) { meta.replaceWith(metaFor()); onSet?.(); $id('kycpane')?.querySelectorAll('.krow').forEach(r => r.refresh?.()); } };
   if (def.kind === 'longtext') { ctl = h('textarea', { id, rows: '3' }); ctl.value = cur; ctl.addEventListener('change', () => set(ctl.value)); }
-  else if (def.kind === 'date') { ctl = h('input', { type: 'date', id }); ctl.value = cur; ctl.addEventListener('change', () => set(ctl.value)); }
+  else if (def.kind === 'date') ctl = dateInput(h, cur, v => set(v), { id });
   else if (def.kind === 'country') { ctl = h('select', { id }, countryOpts(h)); ctl.value = cur; ctl.addEventListener('change', () => set(ctl.value)); }
   else if (def.kind === 'bool') { ctl = h('select', { id }, h('option', { value: '' }, '—'), h('option', { value: 'yes' }, 'Yes'), h('option', { value: 'no' }, 'No')); ctl.value = cur; ctl.addEventListener('change', () => set(ctl.value)); }
   else if (def.kind === 'choice') { ctl = h('select', { id }, h('option', { value: '' }, '—'), def.choices.map(c => h('option', { value: c }, c))); ctl.value = cur; ctl.addEventListener('change', () => set(ctl.value)); }
@@ -301,13 +303,15 @@ function editor(bag, def, ent, onSet) {
     const bits = [];
     const line = h('div', { class: 'kmeta' }, bits.join(' · '));
     if (hist.length) {
-      const d = h('details', {}, h('summary', {}, `${hist.length} earlier value${hist.length > 1 ? 's' : ''}`),
+      const d = h('details', {}, h('summary', { tabindex: '-1' }, `${hist.length} earlier value${hist.length > 1 ? 's' : ''}`),
         h('table', { class: 'khist' }, hist.map(x => h('tr', {}, h('td', {}, displayVal(def, x.v)), h('td', {}, `${fmtDate(x.at)} → ${fmtDate(x.until)}`)))));
       line.append(d);
     }
     return line;
   }
-  return h('div', { class: 'krow' }, h('label', { class: 'lbl', for: id }, def.label), ctl, meta);
+  const row = h('div', { class: 'krow', 'data-key': def.key }, h('label', { class: 'lbl', for: id }, def.label), ctl, meta);
+  if (def.kind === 'computed') row.refresh = () => { ctl.placeholder = computedPreview(bag, def, ent) || ''; };
+  return row;
 }
 function computedPreview(bag, def, ent) { const tmp = { ...bag }; delete tmp[def.key]; return computed(def, tmp, ent); }
 function displayVal(def, v) { if (def.kind === 'country') return COUNTRIES.find(c => c[0] === v)?.[2] || v; if (def.kind === 'date') return fmtDate(v); if (def.kind === 'bool') return v === 'yes' ? 'Yes' : v === 'no' ? 'No' : v; return v; }
@@ -317,8 +321,15 @@ function groupEditor(ent, g) {
   const defs = entityKeys(ent).filter(d => d.group === g);
   const title = GROUPS.find(x => x[0] === g)[1];
   const wrap = h('div', { class: 'kgrid' });
-  const draw = () => wrap.replaceChildren(...defs.map(d => editor(ent.values, d, ent, () => { if (d.key === 'legal_name' && ent.values.legal_name?.v) { ent.name = ent.values.legal_name.v; persist(); } if (/^(reg|op)_/.test(d.key)) draw(); })));
-  draw();
+  const same = () => ent.values.op_same?.v === 'yes';
+  const applySame = () => wrap.querySelectorAll('.krow[data-key^="op_"]').forEach(r => (r.hidden = same()));
+  wrap.replaceChildren(...defs.map(d => d.key === 'op_same' ? sameBox(d) : editor(ent.values, d, ent, () => { if (d.key === 'legal_name' && ent.values.legal_name?.v) { ent.name = ent.values.legal_name.v; persist(); } })));
+  applySame();
+  function sameBox(d) {
+    const cb = h('input', { type: 'checkbox', id: 'kv-op-same' }); cb.checked = same();
+    cb.onchange = () => { setValue(ent.values, d, cb.checked ? 'yes' : 'no'); applySame(); };
+    return h('label', { class: 'opt ksame', for: 'kv-op-same' }, cb, h('div', {}, d.label));
+  }
   const del = g === 'identity' ? h('div', { class: 'btns kdel' }, h('button', { class: 'btn quiet danger', onclick: () => deleteEntity(ent) }, 'Delete entity…')) : null;
   return h('section', { class: 'kblock' }, h('h2', {}, title), wrap, del);
 }
@@ -376,8 +387,7 @@ function personEditor(ent, p) {
   const custom = defs.filter(d => !PERSON_KEYS.includes(d));
   const blocks = groups.map(([t, keys]) => h('div', { class: 'kblock2' }, h('h3', {}, t), h('div', { class: 'kgrid' }, keys.map(k => editor(p.values, defs.find(d => d.key === k), ent)))));
   if (custom.length) blocks.push(h('div', { class: 'kblock2' }, h('h3', {}, 'Custom'), h('div', { class: 'kgrid' }, custom.map(d => editor(p.values, d, ent)))));
-  const until = h('input', { type: 'date', id: 'p-until' }); until.value = p.until || '';
-  until.onchange = () => { p.until = until.value || undefined; persist(); };
+  const until = dateInput(h, p.until || '', v => { p.until = v || undefined; persist(); }, { id: 'p-until' });
   return h('section', { class: 'kblock' },
     h('div', { class: 'btns' }, h('button', { class: 'btn quiet', onclick: () => { view.person = null; drawPanel(); } }, '← People')),
     h('h2', {}, personName(p)),
@@ -423,12 +433,12 @@ function docsView(ent) {
   const rows = ent.docs.map(d => {
     const type = h('select', { 'aria-label': 'Type' }, DOC_TYPES.map(([k, l]) => h('option', { value: k }, l))); type.value = d.type;
     const title = h('input', { type: 'text', 'aria-label': 'Title', value: d.title });
-    const issued = h('input', { type: 'date', 'aria-label': 'Issued' }); issued.value = d.issued || '';
-    const expires = h('input', { type: 'date', 'aria-label': 'Expires' }); expires.value = d.expires || '';
+    const issued = dateInput(h, d.issued || '', v => { d.issued = v; upd(); }, { 'aria-label': 'Issued' });
+    const expires = dateInput(h, d.expires || '', v => { d.expires = v; upd(); }, { 'aria-label': 'Expires' });
     const owner = h('select', { 'aria-label': 'About' }, h('option', { value: '' }, 'The entity'), ent.people.map(p => h('option', { value: p.id }, personName(p)))); owner.value = d.owner || '';
     const note = ageNote(d);
-    const upd = () => { d.type = type.value; d.title = title.value; d.issued = issued.value; d.expires = expires.value; d.owner = owner.value; persist(); drawPanel(); };
-    [type, issued, expires, owner].forEach(x => x.addEventListener('change', upd)); title.addEventListener('change', upd);
+    function upd() { d.type = type.value; d.title = title.value; d.owner = owner.value; persist(); drawPanel(); }
+    [type, owner].forEach(x => x.addEventListener('change', upd)); title.addEventListener('change', upd);
     return h('div', { class: 'kdoc' + (note.bad ? ' bad' : '') },
       h('div', { class: 'kdg' }, h('label', { class: 'fld' }, h('span', { class: 'lbl' }, 'Type'), type), h('label', { class: 'fld' }, h('span', { class: 'lbl' }, 'Title'), title)),
       h('div', { class: 'kdg3' }, h('label', { class: 'fld' }, h('span', { class: 'lbl' }, 'Issued'), issued), h('label', { class: 'fld' }, h('span', { class: 'lbl' }, 'Expires'), expires), h('label', { class: 'fld' }, h('span', { class: 'lbl' }, 'About'), owner)),
