@@ -19,17 +19,22 @@ const ID_KEYS = new Set(['id_type', 'id_number', 'id_country', 'id_issued', 'id_
 const show = (ent, key) => { const r = render(ent, key, '', null); return r.missing ? '' : String(r.show ?? '').trim(); };
 const fmtDay = iso => formatDate(iso, K.P?.settings?.dateFormat || 'DD-MM-YYYY');
 
-/** What the packet can contain, read from the profile: [{id, title, rows:[[label, value]]}] plus people. */
+/**
+ * Everything the packet can contain, as groups of selectable items:
+ * [{id, title, sub, kind: 'section'|'person'|'docs'|'sign', items: [{id, label, value, id_doc?}]}].
+ * Ids are stable (profile keys, person and document ids), so a selection can be remembered.
+ */
 function contents(ent) {
-  const sections = [];
+  const groups = [];
   for (const [g, title] of [...GROUPS, ['custom', 'Other']]) {
-    const rows = [];
+    const items = [];
     for (const d of entityKeys(ent).filter(x => x.group === g)) {
       if (ADDRESS_PARTS.test(d.key)) continue;
-      if (d.key === 'op_address' && ent.values.op_same?.v === 'yes') { rows.push(['Business address', 'Same as the registered address']); continue; }
-      const v = show(ent, d.key); if (v) rows.push([d.key === 'reg_address' ? 'Registered address' : d.key === 'op_address' ? 'Business address' : d.label, v]);
+      const label = d.key === 'reg_address' ? 'Registered address' : d.key === 'op_address' ? 'Business address' : d.label;
+      const v = d.key === 'op_address' && ent.values.op_same?.v === 'yes' ? 'Same as the registered address' : show(ent, d.key);
+      if (v) items.push({ id: 'e:' + d.key, label, value: v, bank: g === 'bank' });
     }
-    if (rows.length) sections.push({ id: g, title, rows });
+    if (items.length) groups.push({ id: 'g:' + g, title, kind: 'section', items });
   }
   // Each person once, with every role they hold.
   const people = new Map();
@@ -37,53 +42,122 @@ function contents(ent) {
     if (!people.has(p)) people.set(p, { p, roles: [], key: `${r.role}.${i + 1}` });
     people.get(p).roles.push(`${r.label} ${i + 1}`);
   });
-  const persons = [...people.values()].map(({ p, roles, key }) => {
-    const rows = [], idRows = [];
+  for (const { p, roles, key } of people.values()) {
+    const name = show(ent, `${key}.full_name`) || '(no name)';
+    const items = [{ id: `p:${p.id}:name`, label: 'Name', value: name, name: true }];
     for (const d of personKeys(ent)) {
       if (NAME_PARTS.has(d.key)) continue;
       if (p.kind === 'company' && ['date_of_birth', 'place_of_birth', 'country_of_birth', 'nationality', 'nationality_2', 'pep', 'pep_details', ...ID_KEYS].includes(d.key)) continue;
       const v = show(ent, `${key}.${d.key}`); if (!v) continue;
-      (ID_KEYS.has(d.key) ? idRows : rows).push([d.key === 'res_address' ? 'Address' : d.label, v]);
+      items.push({ id: `p:${p.id}:${d.key}`, label: d.key === 'res_address' ? 'Address' : d.label, value: v, idDoc: ID_KEYS.has(d.key) });
     }
-    return { name: show(ent, `${key}.full_name`) || '(no name)', roles, rows, idRows };
-  });
-  return { sections, persons };
+    groups.push({ id: 'p:' + p.id, title: name, sub: roles.join(', '), kind: 'person', items });
+  }
+  if (ent.docs.length) groups.push({ id: 'g:docs', title: 'Documents', kind: 'docs', items: ent.docs.map(d => ({ id: 'd:' + d.id, label: d.title, value: docTypeInfo(d.type)[1], doc: d })) });
+  groups.push({ id: 'g:sign', title: 'Signature block', kind: 'sign', items: [{ id: 'sign', label: 'Signature block', value: '' }] });
+  return groups;
 }
+// Shared sparingly by default: no bank details, ID numbers or documents until you tick them.
+const defaultOn = it => !it.bank && !it.idDoc && !it.doc;
+const cpKey = s => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
 // ---------------------------------------------------------------- dialog
 export async function createPacket(ent) {
   const { h, modal } = C;
-  const { sections, persons } = contents(ent);
-  const inc = new Map(sections.map(s => [s.id, true]));
-  let incPeople = persons.length > 0, incIds = false, incSign = true;
-  const docs = new Set();
-  const cp = h('input', { type: 'text', id: 'pk-cp', spellcheck: 'false' });
+  const groups = contents(ent);
+  const all = groups.flatMap(g => g.items);
+  const prefs = (ent.packet ||= { by: {}, last: null, logoH: 48 });
+  // A remembered selection holds every item seen then; items added since get the default.
+  const load = saved => new Set(all.filter(it => (saved && it.id in saved ? saved[it.id] : defaultOn(it))).map(it => it.id));
+  let sel = load(prefs.last), from = prefs.last ? 'last' : '';
+  const open = new Set();
+
+  const cp = h('input', { type: 'text', id: 'pk-cp', spellcheck: 'false', autocomplete: 'off', list: 'pk-cps' });
+  const known = Object.keys(prefs.by).map(k => prefs.by[k].name).filter(Boolean);
+  const cpList = h('datalist', { id: 'pk-cps' }, known.map(n => h('option', { value: n })));
+  const note = h('p', { class: 'hint pk-note' });
+  cp.addEventListener('change', () => {
+    const k = cpKey(cp.value), saved = prefs.by[k];
+    if (saved) { sel = load(saved.sel); from = 'cp'; draw(); }
+  });
+
+  // Logo with a size slider; the preview is drawn at the size it will have on the page.
   const logoBox = h('div', { class: 'pk-logo' });
-  const drawLogo = () => logoBox.replaceChildren(
-    ent.logo ? h('img', { src: ent.logo, alt: 'Logo' }) : h('span', { class: 'hint' }, 'No logo'),
-    h('div', { class: 'btns' },
-      h('button', { class: 'btn', onclick: pickLogo }, ent.logo ? 'Change…' : 'Add logo…'),
-      ent.logo ? h('button', { class: 'btn quiet', onclick: () => { delete ent.logo; persist(); drawLogo(); } }, 'Remove') : null));
+  const drawLogo = () => {
+    const size = h('input', { type: 'range', min: '20', max: '120', step: '2', value: String(prefs.logoH || 48), 'aria-label': 'Logo size' });
+    const img = ent.logo ? h('img', { src: ent.logo, alt: 'Logo', style: `height:${prefs.logoH || 48}px` }) : null;
+    size.addEventListener('input', () => { prefs.logoH = +size.value; if (img) img.style.height = size.value + 'px'; });
+    size.addEventListener('change', () => persist());
+    logoBox.replaceChildren(
+      img ? h('div', { class: 'pk-logo-img' }, img) : h('span', { class: 'hint' }, 'No logo'),
+      h('div', { class: 'pk-logo-ctl' },
+        img ? h('label', { class: 'pk-size' }, h('span', { class: 'lbl' }, 'Size'), size) : null,
+        h('div', { class: 'btns' },
+          h('button', { class: 'btn', onclick: pickLogo }, ent.logo ? 'Change…' : 'Add logo…'),
+          ent.logo ? h('button', { class: 'btn quiet', onclick: () => { delete ent.logo; persist(); drawLogo(); } }, 'Remove') : null)));
+  };
   async function pickLogo() {
     const f = await host.pickImage(); if (!f) return;
     try { ent.logo = await shrink(f); persist(); drawLogo(); } catch (e) { C.toast('Couldn’t read that image: ' + errMsg(e), 6000); }
   }
   drawLogo();
-  const box = (id, label, sub, on, set) => { const cb = h('input', { type: 'checkbox', id, checked: on }); cb.onchange = () => set(cb.checked); return h('label', { class: 'opt', for: id }, cb, h('div', {}, label, sub ? h('small', {}, sub) : null)); };
-  const incList = h('div', { class: 'pk-inc' },
-    sections.map(s => box('pk-s-' + s.id, s.title, `${s.rows.length} item${s.rows.length > 1 ? 's' : ''}`, true, v => inc.set(s.id, v))),
-    persons.length ? box('pk-people', 'People', persons.map(p => p.name).join(', '), true, v => (incPeople = v)) : null,
-    persons.some(p => p.idRows.length) ? box('pk-ids', 'ID document numbers', 'Passport and ID numbers and dates', false, v => (incIds = v)) : null,
-    box('pk-sign', 'Signature block', null, true, v => (incSign = v)));
-  const docList = ent.docs.length ? h('div', { class: 'pk-inc' }, ent.docs.map(d => box('pk-d-' + d.id, d.title, docTypeInfo(d.type)[1], false, v => (v ? docs.add(d) : docs.delete(d))))) : h('p', { class: 'hint' }, 'None stored');
-  const go = async open => {
-    const opts = { counterparty: cp.value.trim(), sections: sections.filter(s => inc.get(s.id)), persons: incPeople ? persons : [], ids: incIds, sign: incSign, docs: ent.docs.filter(d => docs.has(d)) };
+
+  // What goes in: every group with a box that ticks or clears it all, opened to tick single items.
+  const list = h('div', { class: 'pk-tree' });
+  const count = h('span', { class: 'pk-count' });
+  function setItem(g, it, on) {
+    on ? sel.add(it.id) : sel.delete(it.id);
+    // A person without their name isn't sent; ticking any of their details brings the name back.
+    if (g.kind === 'person') { const nm = g.items[0]; if (it === nm && !on) g.items.forEach(x => sel.delete(x.id)); else if (on) sel.add(nm.id); }
+  }
+  function draw() {
+    list.replaceChildren(...groups.map(g => {
+      const n = g.items.filter(it => sel.has(it.id)).length, single = g.kind === 'sign';
+      const gcb = h('input', { type: 'checkbox', 'aria-label': g.title }); gcb.checked = n > 0 && n === g.items.length; gcb.indeterminate = n > 0 && n < g.items.length;
+      gcb.onchange = () => { g.items.forEach(it => setItem(g, it, gcb.checked)); draw(); };
+      const isOpen = open.has(g.id);
+      const head = h('div', { class: 'pk-g' + (n ? ' on' : '') },
+        gcb,
+        h('button', { class: 'pk-t', 'aria-expanded': single ? null : String(isOpen), onclick: () => { if (single) { gcb.click(); return; } isOpen ? open.delete(g.id) : open.add(g.id); draw(); } },
+          !single ? h('i', { class: 'pk-car' + (isOpen ? ' open' : '') }) : null,
+          h('b', {}, g.title), g.sub ? h('span', { class: 'pk-sub' }, g.sub) : null),
+        !single ? h('span', { class: 'pk-n' }, `${n} of ${g.items.length}`) : null);
+      if (!isOpen || single) return h('div', { class: 'pk-grp' }, head);
+      const rows = g.items.map(it => {
+        const cb = h('input', { type: 'checkbox', id: 'pk-' + it.id }); cb.checked = sel.has(it.id);
+        cb.onchange = () => { setItem(g, it, cb.checked); draw(); };
+        return h('label', { class: 'pk-i' + (cb.checked ? ' on' : ''), for: 'pk-' + it.id, title: it.value }, cb, h('span', { class: 'pk-l' }, it.label), h('span', { class: 'pk-v' }, it.value));
+      });
+      return h('div', { class: 'pk-grp open' }, head, h('div', { class: 'pk-items' }, rows));
+    }));
+    const items = all.filter(it => it.id !== 'sign' && !it.doc), docs = all.filter(it => it.doc);
+    const ni = items.filter(it => sel.has(it.id)).length, nd = docs.filter(it => sel.has(it.id)).length;
+    count.textContent = `${ni} of ${items.length} items${docs.length ? ` · ${nd} document${nd === 1 ? '' : 's'}` : ''}`;
+    note.textContent = from === 'cp' ? `Same selection as the last packet for ${cp.value.trim()}` : from === 'last' ? 'Starting from your last packet’s selection' : '';
+  }
+  draw();
+  const bulk = on => { for (const g of groups) for (const it of g.items) setItem(g, it, on); from = ''; draw(); };
+
+  const go = async openIt => {
+    const counterparty = cp.value.trim();
+    const pick = g => g.items.filter(it => sel.has(it.id));
+    const opts = {
+      counterparty, logoH: prefs.logoH || 48,
+      sections: groups.filter(g => g.kind === 'section').map(g => ({ title: g.title, rows: pick(g).map(it => [it.label, it.value]) })).filter(s => s.rows.length),
+      persons: groups.filter(g => g.kind === 'person' && sel.has(g.items[0].id)).map(g => ({ name: g.title, roles: g.sub ? g.sub.split(', ') : [], rows: pick(g).filter(it => !it.name).map(it => [it.label, it.value]) })),
+      docs: all.filter(it => it.doc && sel.has(it.id)).map(it => it.doc), sign: sel.has('sign'),
+    };
+    if (!opts.sections.length && !opts.persons.length && !opts.docs.length) { C.toast('Nothing selected.'); return; }
+    // Remember the choice, for this counterparty and as the starting point next time.
+    const snapshot = Object.fromEntries(all.map(it => [it.id, sel.has(it.id)]));
+    prefs.last = snapshot; if (counterparty) prefs.by[cpKey(counterparty)] = { name: counterparty, sel: snapshot };
+    persist();
     m.close();
     const b = C.busy('Building the packet…'); let bytes, notes;
     try { ({ bytes, notes } = await buildPacket(ent, opts)); } catch (e) { b.done(); C.toast('Couldn’t build the packet: ' + errMsg(e), 8000); return; }
     b.done();
-    const name = `${safeName(ent.name)} - KYC information${opts.counterparty ? ' - ' + safeName(opts.counterparty) : ''}.pdf`;
-    if (open) { C.setMode('pdf'); await C.openEntries([{ name, path: null, type: 'application/pdf', bytes }]); }
+    const name = `${safeName(ent.name)} - KYC information${counterparty ? ' - ' + safeName(counterparty) : ''}.pdf`;
+    if (openIt) { C.setMode('pdf'); await C.openEntries([{ name, path: null, type: 'application/pdf', bytes }]); }
     else {
       const path = await host.pickSave(name); if (!path) return;
       try { await host.writePath(path, bytes); } catch (e) { C.toast('Couldn’t save: ' + errMsg(e), 7000); return; }
@@ -93,10 +167,12 @@ export async function createPacket(ent) {
     if (notes.length) setTimeout(() => C.toast(notes.join(' '), 7000), 3800);
   };
   const m = modal('Create KYC packet',
-    h('label', { class: 'fld', for: 'pk-cp' }, h('span', { class: 'lbl' }, 'For (counterparty)'), cp),
-    h('div', { class: 'fld' }, h('span', { class: 'lbl' }, 'Logo'), logoBox),
-    h('div', { class: 'fld' }, h('span', { class: 'lbl' }, 'Include'), incList),
-    h('div', { class: 'fld' }, h('span', { class: 'lbl' }, 'Attach documents'), docList),
+    h('div', { class: 'pk-top' },
+      h('label', { class: 'fld', for: 'pk-cp' }, h('span', { class: 'lbl' }, 'For (counterparty)'), cp, cpList),
+      h('div', { class: 'fld' }, h('span', { class: 'lbl' }, 'Logo'), logoBox)),
+    h('div', { class: 'pk-bar' }, h('span', { class: 'lbl' }, 'Include'), count, h('span', { class: 'sp' }),
+      h('button', { class: 'btn quiet', onclick: () => bulk(true) }, 'Select all'), h('button', { class: 'btn quiet', onclick: () => bulk(false) }, 'Select none')),
+    note, list,
     h('div', { class: 'actions' },
       h('button', { class: 'btn quiet', onclick: () => m.close() }, 'Cancel'),
       h('button', { class: 'btn', onclick: () => go(true) }, 'Open in PDF tab'),
@@ -119,7 +195,7 @@ async function shrink(f) {
 
 /** The packet goes into the fill record like any filled form. */
 function record(ent, o) {
-  const fields = [...o.sections.flatMap(s => s.rows), ...o.persons.flatMap(p => [['Name', p.name], ...p.rows, ...(o.ids ? p.idRows : [])])].map(([label, value]) => ({ label, key: '', value }));
+  const fields = [...o.sections.flatMap(s => s.rows), ...o.persons.flatMap(p => [['Name', p.name], ...p.rows])].map(([label, value]) => ({ label, key: '', value }));
   K.P.log.unshift({ at: new Date().toISOString(), entity: ent.id, counterparty: o.counterparty, file: 'KYC packet', fp: 'packet', fields, docs: o.docs.map(d => d.title) });
   if (K.P.log.length > 5000) K.P.log.length = 5000;
   persist();
@@ -173,7 +249,7 @@ export async function buildPacket(ent, o) {
     try {
       const raw = Uint8Array.from(atob(ent.logo.split(',')[1]), c => c.charCodeAt(0));
       const img = ent.logo.startsWith('data:image/png') ? await pdf.embedPng(raw) : await pdf.embedJpg(raw);
-      const sc = Math.min(160 / img.width, 56 / img.height, 1); const w = img.width * sc, hh = img.height * sc;
+      const H = Math.max(12, Math.min(150, o.logoH || 48)); const sc = Math.min(300 / img.width, H / img.height); const w = img.width * sc, hh = img.height * sc;
       page.drawImage(img, { x: M, y: y - hh, width: w, height: hh }); y -= hh + 22;
     } catch {}
   }
@@ -187,8 +263,8 @@ export async function buildPacket(ent, o) {
     o.persons.forEach((p, i) => {
       need(48); if (i) { y -= 4; rule(); y -= 14; }
       text(p.name, M, 11, B); const nw = B.widthOfTextAtSize(clean(p.name), 11);
-      text(p.roles.join(', '), M + nw + 10, 8.5, F, GREY); y -= 17;
-      for (const [l, v] of [...p.rows, ...(o.ids ? p.idRows : [])]) row(l, v);
+      if (p.roles.length) text(p.roles.join(', '), M + nw + 10, 8.5, F, GREY); y -= 17;
+      for (const [l, v] of p.rows) row(l, v);
     });
   }
   if (o.sign) {
