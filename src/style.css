@@ -372,3 +372,9 @@ details.more > summary { font-family: var(--mono); font-size: 10.5px; text-trans
 
 .xt td.slot.on.ok { background: #DFF3EA; box-shadow: inset 0 -2px 0 #00875A; }
 .xt td.slot.on.check { background: #FFF0CC; box-shadow: inset 0 -2px 0 #D48A00; }
+
+/* Nothing open: hide what needs a document. The toolbar keeps Open, Fill from profile and Profile. */
+#app.nodoc .doc-only { display: none !important; }
+#app.nodoc { grid-template-rows: auto minmax(0, 1fr); }
+#app.nodoc .main { grid-template-columns: minmax(0, 1fr); }
+#app.nodoc .tb .grp:has(#bProfile) { border-right: 0; }

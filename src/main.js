@@ -997,6 +997,7 @@ async function openSample() { await openEntries([{ name: 'Sample rental applicat
 
 // ---------------------------------------------------------------- chrome
 function updateChrome() {
+  setDocMode();
   const n = S.pages.length, c = curPage();
   $('#stPage').textContent = n ? `Page ${c ? pageNo(c) : 1} of ${n}` : 'No document';
   const files = visDocs().filter(d => !d.hidden).length, ed = editCount();
@@ -1010,7 +1011,9 @@ function updateChrome() {
   $('#cStamps').textContent = stampsActive() ? '●' : '';
   host.setTitle(n ? `${S.dirty ? '● ' : ''}${S.title || 'Untitled'} — Proof` : 'Proof');
 }
-function renderAll() { renderThumbs(); layoutView(); renderTabs(); renderInsp(); updateChrome(); }
+/** With nothing open, only what works without a document is shown. Set before layout, so page fit uses the real width. */
+function setDocMode() { $('#app').classList.toggle('nodoc', !S.pages.length); }
+function renderAll() { setDocMode(); renderThumbs(); layoutView(); renderTabs(); renderInsp(); updateChrome(); }
 
 // ---------------------------------------------------------------- commands & keys
 async function doOpen() { const e = await host.pickOpen(); if (e.length) openEntries(e); }

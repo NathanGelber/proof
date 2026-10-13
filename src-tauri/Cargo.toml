@@ -1,6 +1,6 @@
 [package]
 name = "proof"
-version = "0.5.1"
+version = "0.5.2"
 description = "Proof: a small PDF workbench"
 edition = "2021"
 
