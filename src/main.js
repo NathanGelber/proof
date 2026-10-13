@@ -612,6 +612,7 @@ function thumbClick(e, u) {
     if (!e.ctrlKey) S.sel.clear();
     for (let i = lo; i <= hi; i++) S.sel.add(S.pages[i].uid);
   } else if (e.ctrlKey || e.metaKey) { S.sel.has(u) ? S.sel.delete(u) : S.sel.add(u); S.anchor = u; }
+  else if (S.sel.size === 1 && S.sel.has(u)) S.sel.clear(); // click the selected page again to unselect it
   else { S.sel = new Set([u]); S.anchor = u; }
   updateSel(); setCur(u, true);
 }
@@ -621,6 +622,8 @@ function updateSel() {
   updateChrome();
 }
 let sortPend = null;
+// A click on empty space in the page list clears the selection.
+$('#thumbs').addEventListener('click', e => { if (!e.target.closest('.th') && S.sel.size) { S.sel.clear(); updateSel(); } });
 new Sortable($('#thumbs'), {
   animation: 120, delay: 120, delayOnTouchOnly: true,
   onStart() { sortPend = snap(); },
@@ -779,7 +782,8 @@ function inspPage(body) {
         h('dt', {}, 'Edits'), h('dd', {}, p.items.length ? `${p.items.length} on this page` : 'None')),
       h('div', { class: 'btns' },
         h('button', { class: 'btn', onclick: () => rotatePages([p], -90) }, 'Rotate left'), h('button', { class: 'btn', onclick: () => rotatePages([p], 90) }, 'Rotate right'),
-        h('button', { class: 'btn', onclick: () => insertBlank(p.uid) }, 'Blank after'), h('button', { class: 'btn danger', onclick: () => deletePages([p]) }, 'Delete'))));
+        h('button', { class: 'btn', onclick: () => insertBlank(p.uid) }, 'Blank after'), h('button', { class: 'btn danger', onclick: () => deletePages([p]) }, 'Delete')),
+      S.sel.size ? h('div', { class: 'btns' }, h('button', { class: 'btn quiet', onclick: () => { S.sel.clear(); updateSel(); } }, 'Clear selection')) : null));
   }
   const toolName = $(`#tools [data-t="${S.tool}"]`).firstChild.textContent;
   if (TOOL_HINT[S.tool]) body.append(sec(toolName, h('p', { class: 'hint' }, TOOL_HINT[S.tool])));
