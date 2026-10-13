@@ -18,7 +18,7 @@ import { K, V, persist, setValue, rawValue, peopleIn, todayIso, refreshInfo, err
 import { pageLines, describeFields, flatLines, fingerprint, sha256 } from './extract.js';
 import { loadOffice, isOfficeName } from './office.js';
 import { localFields, localLines, claudeMatch, claudeRequest, render, placeOnLine, yesNoOption, learn, libLabel, isQuestionLine, lineLabel, fieldLabel, autoAs } from './match.js';
-import { ensureUnlocked, curEntity, setCurEntity, openProfile, attachDocs } from './ui.js';
+import { ensureUnlocked, curEntity, setCurEntity, openProfile, attachDocs, showForm, renderKyc } from './ui.js';
 
 let C = null;
 let SES = null;
@@ -26,7 +26,7 @@ let SES = null;
 export function initFill(ctx) {
   C = ctx;
   Object.assign(C.hooks, {
-    fillNow, marks: drawMarks, pick: pickField, beforeSave,
+    fillNow, marks: drawMarks, pick: pickField, beforeSave, drop: startFromEntries, saveForm, closeForm,
     reset: () => { if (SES && SES.kind !== 'office') SES = null; },
     itemClass: it => { if (!it.kyc || SES?.kind !== 'flat') return ''; const x = SES.items.find(i => i.itemId === it.id); return x ? ' kyc-' + x.status : ''; },
     itemSelected: id => { const x = SES?.items.find(i => i.itemId === id); if (x) { SES.sel = x.n; SES.picking = null; } },
@@ -34,33 +34,66 @@ export function initFill(ctx) {
 }
 
 /** The profile locked: the session holds profile objects, so it ends. Answers already on pages stay. */
-export function endFill() { if (ov) closeOfficeView(true); SES = null; }
+export function endFill() { SES = null; }
 
-/** Is a fill session running on one of these documents? Then the Form tab shows its list. */
-export function fillPanelFor(docs, body) {
-  if (!SES || SES.kind === 'office' || !docs.includes(SES.doc) || !C.S.docs.includes(SES.doc)) return false;
-  body.append(panel());
-  requestAnimationFrame(() => body.querySelector('.fc.sel')?.scrollIntoView({ block: 'nearest' }));
-  return true;
+/** What's being filled: 'pdf' (pages on screen, fields or flat), 'office', or null. */
+export function fillKind() {
+  if (!SES) return null;
+  if (SES.kind === 'office') return 'office';
+  return C.S.docs.includes(SES.doc) ? 'pdf' : null;
+}
+export function fillName() { const k = fillKind(); return k === 'office' ? SES.entry.name : k === 'pdf' ? SES.doc.name : ''; }
+
+/** Draw the running fill into the KYC tab: the list, and for Word/Excel the preview. */
+export function drawFill() {
+  if (!fillKind()) return;
+  if (SES.kind === 'office') { buildOfficePane(); renderPreview(); } else C.redrawDoc(SES.doc);
+  drawSide();
 }
 
 // ================================================================ starting
-async function fillNow() {
-  if (!C.S.pages.length) {
+/** pick: ask for a file even when a document is open. */
+export async function fillNow(pick = false) {
+  if (!(await ensureUnlocked())) return;
+  C.setMode('kyc');
+  if (pick || !C.S.pages.length) {
     const picked = await host.pickOpen({ multiple: false, title: 'Choose the form to fill' });
-    if (!picked.length) return;
-    if (isOfficeName(picked[0].name)) return startOffice(picked[0]);
-    await C.openEntries(picked);
-    if (!C.S.pages.length) return;
+    if (picked.length) await startFromEntries(picked);
+    return;
   }
   const docs = C.S.docs.filter(d => !d.hidden && C.S.pages.some(p => p.doc === d));
   const target = docs.find(d => d.fields.length) || docs[0];
   if (target) await startPdf(target);
 }
 
+/** A file picked or dropped in the KYC tab: Word and Excel open in the preview, PDFs on the shared pages. */
+async function startFromEntries(entries) {
+  const e = entries.find(x => isOfficeName(x.name) || /pdf$/i.test(x.type || '') || /\.pdf$/i.test(x.name));
+  if (!e) { C.toast('That isn’t a form Proof can fill: use a PDF, Word or Excel file.', 6000); return; }
+  if (isOfficeName(e.name)) return startOffice(e);
+  if (SES?.kind === 'office' && !(await closeOfficeView())) return;
+  const before = new Set(C.S.docs);
+  await C.openEntries([e]);
+  const doc = C.S.docs.find(d => !before.has(d) && !d.hidden);
+  if (doc) await startPdf(doc);
+}
+
+/** Save the form. A PDF filled here goes into a copy the first time ("… - filled.pdf"); after that, into that copy. */
+async function saveForm() {
+  if (SES?.kind === 'office') return saveOffice();
+  if (!C.S.pages.length) return;
+  if (fillKind() === 'pdf' && !SES.copySaved) { if (await C.saveCopy(' - filled')) SES.copySaved = true; return; }
+  return C.save();
+}
+async function closeForm() {
+  if (SES?.kind === 'office') { await closeOfficeView(); return; }
+  if (C.S.pages.length) await C.closeDoc();
+  showForm();
+}
+
 async function startPdf(doc, entity) {
   if (!(await ensureUnlocked())) return;
-  if (SES && SES.kind !== 'office' && SES.doc === doc && !entity) { C.setTab('form'); return; }
+  if (SES && SES.kind !== 'office' && SES.doc === doc && !entity) { C.setMode('kyc'); showForm(); return; }
   const ent = entity || curEntity(); if (!ent) { openProfile('identity'); return; }
   const b = C.busy('Reading the form…');
   let lines, fields, fp;
@@ -80,7 +113,7 @@ async function startPdf(doc, entity) {
   if (flat) buildFlat(fl, saved); else buildFields(fields, saved);
   for (const it of SES.items) { settle(it); apply(it); }
   SES.changed = SES.items.some(i => i.applied);
-  C.redrawDoc(doc); C.setTab('form'); C.updateChrome();
+  C.setMode('kyc'); showForm(); C.updateChrome();
   summaryToast();
   runClaude();
 }
@@ -95,10 +128,11 @@ export async function startOffice(entry, entity) {
   b.done();
   if (!od.slots.length) { C.toast(`Proof couldn’t find any spots for answers in ${entry.name}: no empty cells beside labels, blanks, form fields or tick boxes.`, 8000); return; }
   const fp = 'office:' + await sha256(JSON.stringify([od.kind, od.slots.map(s => [s.name, s.left, s.above, s.tip, s.right])]));
+  if (SES?.kind === 'office' && !(await closeOfficeView())) return;
   SES = newSession('office', ent, fp, K.P.mappings[fp], { entry, od });
   buildFields(od.slots, SES.saved);
   for (const it of SES.items) { settle(it); apply(it); }
-  openOfficeView();
+  C.setMode('kyc'); showForm();
   summaryToast();
   runClaude();
 }
@@ -233,7 +267,7 @@ function refresh() {
   if (!SES) return;
   if (SES.kind === 'office') { drawSide(); schedulePreview(); return; }
   C.redrawDoc(SES.doc);
-  if (C.S.itab === 'form') C.renderInsp();
+  drawSide();
 }
 
 function select(it, reveal = true) {
@@ -260,7 +294,7 @@ function revealItem(it) {
 function pickField(docId, name) {
   if (!SES || SES.kind !== 'pdf' || SES.doc.id !== docId) { C.setTab('form'); return; }
   const it = SES.byName.get(name); if (!it) return;
-  C.S.itab = 'form';
+  if (C.mode() !== 'kyc') { C.setMode('kyc'); showForm(); }
   select(it, false);
 }
 
@@ -283,8 +317,8 @@ function saveMissing(it, v) {
   const bag = def.scope === 'person' ? peopleIn(SES.ent, def.role)[def.n - 1]?.values : SES.ent.values;
   if (!bag) return;
   setValue(bag, def, v);
+  SES.focusNext = true;
   sync(); refresh();
-  C.toast(`Saved to your profile: ${keyLabel(SES.ent, it.key)}.`);
 }
 function addPerson(role) {
   const ent = SES.ent;
@@ -369,7 +403,7 @@ function panel() {
   const entSel = K.P.entities.length > 1 ? h('select', { 'aria-label': 'Entity' }, K.P.entities.map(e => h('option', { value: e.id }, e.name))) : null;
   if (entSel) { entSel.value = ent.id; entSel.onchange = () => { const e = K.P.entities.find(x => x.id === entSel.value); setCurEntity(e.id); ses.kind === 'office' ? startOffice(ses.entry, e) : startPdf(ses.doc, e); }; }
   wrapEl.append(h('div', { class: 'fp-h' },
-    h('h3', {}, 'Fill from profile'),
+    h('h3', {}, 'Fill'),
     entSel || h('p', { class: 'hint' }, `As ${ent.name}`),
     h('div', { class: 'fp-sum' },
       h('span', { class: 'n ok' }, String(filled.length)), ' filled',
@@ -401,8 +435,9 @@ function panel() {
   wrapEl.append(h('div', { class: 'fp-f' },
     ses.kind === 'office'
       ? h('button', { class: 'btn primary', onclick: saveOffice }, 'Save filled copy…')
-      : h('p', { class: 'hint' }, 'Save as usual (Ctrl+S). Proof asks who it’s for once, keeps a record and learns the labels.'),
-    h('div', { class: 'btns' }, h('button', { class: 'btn quiet', onclick: attachDocs }, 'Attach documents…'), h('button', { class: 'btn quiet', onclick: () => openProfile() }, 'Profile'))));
+      : h('button', { class: 'btn primary', onclick: saveForm }, 'Save…'),
+    h('p', { class: 'hint' }, 'Proof asks who it’s for once, keeps a record and learns the labels.'),
+    h('div', { class: 'btns' }, ses.kind !== 'office' ? h('button', { class: 'btn quiet', onclick: attachDocs }, 'Attach documents…') : null, h('button', { class: 'btn quiet', onclick: closeForm }, 'Close form'))));
 
   function card(it) {
     const sel = ses.sel === it.n;
@@ -452,13 +487,17 @@ function valueInput(def, onSet) {
   else if (def.kind === 'bool') el = h('select', {}, h('option', { value: '' }, 'Choose…'), h('option', { value: 'yes' }, 'Yes'), h('option', { value: 'no' }, 'No'));
   else if (def.kind === 'choice') el = h('select', {}, h('option', { value: '' }, 'Choose…'), def.choices.map(c => h('option', { value: c }, c)));
   else if (def.kind === 'longtext') el = h('textarea', { rows: '3' });
-  else el = h('input', { type: 'text', spellcheck: 'false', placeholder: 'Saved to your profile' });
+  else el = h('input', { type: 'text', spellcheck: 'false', placeholder: 'Type, then Tab' });
   el.setAttribute('aria-label', def.label);
-  const go = () => { const v = (el.value || '').trim(); if (v) onSet(v); };
-  const instant = el.tagName === 'SELECT' || el.type === 'date';
-  if (instant) el.addEventListener('change', go);
-  else el.addEventListener('keydown', e => { if (e.key === 'Enter' && (el.tagName !== 'TEXTAREA' || e.ctrlKey)) { e.preventDefault(); go(); } });
-  return h('div', { class: 'fc-in' }, el, instant ? null : h('button', { class: 'btn', onclick: go }, 'Save'));
+  // Saved when you leave the field (Tab, Enter, or clicking elsewhere); the next missing one gets the cursor.
+  let done = false;
+  const go = () => { if (done) return; const v = (el.value || '').trim(); if (!v) return; done = true; onSet(v); };
+  el.addEventListener('change', go);
+  el.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && (el.tagName !== 'TEXTAREA' || e.ctrlKey)) { e.preventDefault(); go(); }
+    if (e.key === 'Escape') { el.value = ''; el.blur(); }
+  });
+  return h('div', { class: 'fc-in' }, el);
 }
 
 const fmtDate = iso => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || ''); return m ? `${m[3]}-${m[2]}-${m[1]}` : iso || ''; };
@@ -555,46 +594,45 @@ function record(ses) {
   persist();
 }
 
-// ================================================================ Word and Excel: own view with preview
-let ov = null, previewT = null;
+// ================================================================ Word and Excel: preview in the KYC tab
+let previewT = null;
+const pane = () => document.getElementById('kycpane');
+const officeOn = () => SES?.kind === 'office' && !!pane()?.querySelector('.kfo-doc');
 
-function openOfficeView() {
-  const { h } = C;
-  closeOfficeView(true);
-  ov = h('div', { class: 'kfo', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Fill from profile' });
-  ov.append(
-    h('header', { class: 'kh' }, h('h1', {}, 'Fill'), h('span', { class: 'kfo-file', title: SES.entry.path || SES.entry.name }, SES.entry.name), h('span', { class: 'sp' }),
-      h('span', { class: 'kstate' }, SES.od.kind === 'xlsx' ? 'Excel · answers go into a copy' : 'Word · answers go into a copy'),
-      h('button', { class: 'tbtn', onclick: () => closeOfficeView() }, 'Close')),
-    h('main', { class: 'kfo-doc' }, h('div', { class: SES.od.kind === 'xlsx' ? 'kfo-sheets' : 'kfo-paper' }, h('p', { class: 'hint' }, 'Rendering…'))),
-    h('aside', { class: 'kfo-side' }));
-  ov.querySelector('.kfo-doc').addEventListener('click', e => {
+function buildOfficePane() {
+  const { h } = C; const p = pane(); if (!p) return;
+  p.dataset.sec = 'office'; p.classList.add('office');
+  const doc = h('div', { class: 'kfo-doc' }, h('div', { class: SES.od.kind === 'xlsx' ? 'kfo-sheets' : 'kfo-paper' }, h('p', { class: 'hint' }, 'Rendering…')));
+  doc.addEventListener('click', e => {
     const t = e.target.closest('[data-n],[data-slot]'); if (!t || !SES) return;
     const it = t.dataset.n != null ? SES.items[+t.dataset.n] : SES.byName.get(t.dataset.slot);
     if (it) select(it, false);
   });
-  document.body.append(ov);
-  document.addEventListener('keydown', ovKeys, true);
-  drawSide(); renderPreview();
+  p.replaceChildren(h('div', { class: 'kfo-bar' }, h('b', { title: SES.entry.path || SES.entry.name }, SES.entry.name), h('span', {}, (SES.od.kind === 'xlsx' ? 'Excel' : 'Word') + ' · answers go into a copy; the original stays as it is')), doc);
 }
-function ovKeys(e) { if (e.key === 'Escape' && ov && !document.querySelector('.scrim')) { e.stopPropagation(); closeOfficeView(); } }
 
+/** Resolves true when the Word/Excel fill is closed (or there was none). */
 function closeOfficeView(force = false) {
-  if (!ov) return;
-  if (!force && SES?.kind === 'office' && SES.changed) {
-    const { h, modal } = C;
-    const m = modal('Close without saving?', h('p', {}, 'The filled copy hasn’t been saved since your last change.'),
-      h('div', { class: 'actions' }, h('button', { class: 'btn quiet', onclick: () => m.close() }, 'Keep filling'), h('button', { class: 'btn danger', onclick: () => { m.close(); closeOfficeView(true); } }, 'Close')));
-    return;
-  }
-  ov.remove(); ov = null; document.removeEventListener('keydown', ovKeys, true);
-  if (SES?.kind === 'office') SES = null;
+  if (SES?.kind !== 'office') return Promise.resolve(true);
+  const finish = () => { SES = null; const p = pane(); if (p) p.classList.remove('office'); showForm(); return true; };
+  if (force || !SES.changed) return Promise.resolve(finish());
+  const { h, modal } = C;
+  return new Promise(resolve => {
+    const m = modal('Close without saving?', h('p', {}, `The filled copy of ${SES.entry.name} hasn’t been saved since your last change.`),
+      h('div', { class: 'actions' }, h('button', { class: 'btn quiet', onclick: () => { m.close(); resolve(false); } }, 'Keep filling'), h('button', { class: 'btn danger', onclick: () => { m.close(); resolve(finish()); } }, 'Close')));
+    m.scrim.addEventListener('cancel', () => resolve(false));
+  });
 }
 
 function drawSide() {
-  if (!ov || !SES) return;
-  const side = ov.querySelector('.kfo-side'); const top = side.scrollTop;
+  const side = document.getElementById('kycside'); if (!side || !SES || C.mode() !== 'kyc') return;
+  const top = side.scrollTop;
   side.replaceChildren(panel()); side.scrollTop = top;
+  if (SES.focusNext) {
+    SES.focusNext = false;
+    const next = side.querySelector('.fp-g.miss .fc-in input, .fp-g.miss .fc-in select, .fp-g.miss .fc-in textarea');
+    if (next) { next.focus(); next.closest('.fc')?.scrollIntoView({ block: 'nearest' }); return; }
+  }
   side.querySelector('.fc.sel')?.scrollIntoView({ block: 'nearest' });
 }
 
@@ -615,13 +653,13 @@ function officeValues(marked) {
 }
 
 async function renderPreview() {
-  if (!ov || !SES) return;
-  const ses = SES; const host_ = ov.querySelector('.kfo-doc > div');
+  if (!officeOn()) return;
+  const ses = SES; const host_ = pane().querySelector('.kfo-doc > div');
   try {
     const bytes = await (await loadOffice(ses.entry.bytes, ses.entry.name)).save(officeValues(true));
     const out = await loadOffice(bytes, ses.entry.name);
-    if (SES !== ses || !ov) return;
-    const doc = ov.querySelector('.kfo-doc'); const top = doc.scrollTop;
+    if (SES !== ses || !officeOn()) return;
+    const doc = pane().querySelector('.kfo-doc'); const top = doc.scrollTop;
     host_.replaceChildren(ses.od.kind === 'xlsx' ? sheetHtml(out) : wordHtml(out.dom));
     markSpans(host_);
     doc.scrollTop = top;

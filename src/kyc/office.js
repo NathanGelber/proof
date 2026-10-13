@@ -450,3 +450,148 @@ async function xlsx(zip, name) {
     },
   };
 }
+
+// ================================================================ reading answers from a filled form
+// The reverse of filling: find each label and the answer someone already wrote next to it.
+// Returns descriptions in the same shape as answer spots (so the same matching applies), each
+// with the answer as `value`: text, or true for a ticked box.
+
+const isBlank = t => !t || /^[\s_.…·-]*$/.test(t);
+
+export async function readAnswers(bytes, name) {
+  const od = await loadOffice(bytes, name);
+  return od.kind === 'xlsx' ? xlsxAnswers(od) : docxAnswers(od.dom);
+}
+
+function docxAnswers(doc) {
+  const body = kid(doc.documentElement, W, 'body'); const out = [];
+  const paras = allNS(body, W, 'p').filter(p => !ancestor(p, W, 'txbxContent', body));
+  const pIndex = new Map(paras.map((p, i) => [p, i]));
+  // Here a control's own text counts, so read paragraphs including content controls.
+  const fullText = p => clean([...p.getElementsByTagNameNS(W, 't')].filter(t => !ancestor(t, W, 'del', p)).map(t => t.textContent).join(''));
+  const ptext = paras.map(fullText);
+  const head = paras.map((p, i) => !!ptext[i] && wordHeading(p, ptext[i]));
+  const sectionAt = i => { for (let k = i - 1; k >= 0; k--) if (head[k]) return ptext[k]; return ''; };
+  const ctxAt = i => { const o = []; for (let k = i - 1; k >= 0 && o.length < 8; k--) { if (ptext[k]) o.push(ptext[k].slice(0, 120)); if (head[k]) break; } return o; };
+  const cellText = tc => clean(allNS(tc, W, 'p').map(fullText).join(' '));
+  const add = (d, pi) => out.push({ kind: 'text', tip: '', left: '', above: '', right: '', inside: '', below: '', nice: '', options: [], page: 0, section: sectionAt(pi), ctx: ctxAt(pi), ...d });
+  const inTable = new Set();
+
+  // Tables: a header row over rows of answers, or label | answer pairs.
+  for (const tbl of allNS(body, W, 'tbl')) {
+    const rows = kidsNS(tbl, W, 'tr').map(tr => kidsNS(tr, W, 'tc').map(tc => ({ tc, text: cellText(tc), bold: allNS(tc, W, 'r').filter(r => clean(r.textContent)).every(r => { const b = kid(kid(r, W, 'rPr'), W, 'b'); return b && !/^(0|false)$/.test(attr(b, 'val') || ''); }) })));
+    for (const p of allNS(tbl, W, 'p')) inTable.add(p);
+    const pi = pIndex.get(allNS(tbl, W, 'p')[0]) ?? 0;
+    const first = rows[0] || [];
+    const headerTable = rows.length >= 2 && first.length >= 2 && first.every(c => c.text && labelLike(c.text) && c.text.length <= 60) && (first.length >= 3 || first.every(c => c.bold));
+    if (headerTable) {
+      rows.slice(1).forEach((r, ri) => {
+        if (!r.some(c => c.text)) return;
+        r.forEach((c, ci) => { const h = first[ci]; if (h && !isBlank(c.text)) add({ above: h.text, nice: `${h.text} ${ri + 1}`, value: c.text, ctx: [r[0]?.text, ...ctxAt(pi)].filter(Boolean) }, pi); });
+      });
+      continue;
+    }
+    for (const r of rows) for (let i = 0; i + 1 < r.length; i += 2) {
+      const [l, v] = [r[i], r[i + 1]];
+      if (l.text && labelLike(l.text) && !isBlank(v.text) && !allNS(v.tc, W, 'sdt').length && !allNS(v.tc, W, 'fldChar').length) add({ left: l.text, value: v.text }, pi);
+    }
+  }
+
+  // Content controls with an answer.
+  for (const sdt of allNS(body, W, 'sdt')) {
+    const pr = kid(sdt, W, 'sdtPr'), content = kid(sdt, W, 'sdtContent'); if (!pr || !content || kid(pr, W, 'showingPlcHdr')) continue;
+    if (kid(pr, W, 'docPartObj') || kidsNS(content, W, 'tr').length || kidsNS(content, W, 'tbl').length) continue;
+    const p = sdt.parentNode.localName === 'p' ? sdt.parentNode : allNS(content, W, 'p')[0]; const pi = pIndex.get(p) ?? 0;
+    const alias = attr(kid(pr, W, 'alias'), 'val') || '';
+    const [bef, aft] = sdt.parentNode.localName === 'p' ? around(p, sdt) : ['', ''];
+    let left = bef; if (!left) { const tc = ancestor(sdt, W, 'tc', body); const prev = tc?.previousElementSibling; if (prev?.localName === 'tc') left = cellText(prev); }
+    const cb = kid(pr, W14, 'checkbox');
+    if (cb) { const chk = kid(cb, W14, 'checked'); if (chk && /^(1|true)$/.test(chk.getAttributeNS(W14, 'val') || '')) add({ kind: 'check', tip: alias, left, right: aft, value: true }, pi); continue; }
+    const text = clean(content.textContent); if (isBlank(text)) continue;
+    add({ tip: alias, left, value: text }, pi);
+  }
+
+  // Old-style form fields with an answer.
+  for (const fc of allNS(body, W, 'fldChar')) {
+    if (attr(fc, 'fldCharType') !== 'begin') continue;
+    const ff = kid(fc, W, 'ffData'); if (!ff) continue;
+    const r0 = fc.parentNode, p = ancestor(r0, W, 'p', body); if (!p) continue;
+    const pi = pIndex.get(p) ?? 0; const [bef] = around(p, r0);
+    const runs = kidsNS(p, W, 'r'); const i0 = runs.indexOf(r0);
+    let sep = -1, end = -1;
+    for (let i = i0 + 1; i < runs.length; i++) { const f = kid(runs[i], W, 'fldChar'); const t = f && attr(f, 'fldCharType'); if (t === 'separate' && sep < 0) sep = i; if (t === 'end') { end = i; break; } }
+    const help = attr(kid(ff, W, 'helpText'), 'val') || attr(kid(ff, W, 'statusText'), 'val') || '';
+    const cbx = kid(ff, W, 'checkBox');
+    if (cbx) {
+      const c = kid(cbx, W, 'checked') || kid(cbx, W, 'default'); const on = !!c && !/^(0|false)$/.test(attr(c, 'val') ?? (kid(cbx, W, 'checked') ? '1' : '0'));
+      if (on) add({ kind: 'check', tip: help, left: bef, right: clean(runs.slice(end + 1).map(r => r.textContent).join('')).slice(0, 100), value: true }, pi);
+      continue;
+    }
+    if (sep < 0 || end < 0) continue;
+    const text = clean(runs.slice(sep + 1, end).map(r => r.textContent).join('')); if (isBlank(text)) continue;
+    add({ tip: help, left: bef, value: text }, pi);
+  }
+
+  // Plain paragraphs: "Label: answer", and ticked boxes.
+  paras.forEach((p, pi) => {
+    if (inTable.has(p) || allNS(p, W, 'sdt').length || allNS(p, W, 'fldChar').length) return;
+    const t = ptext[pi]; if (!t) return;
+    const ticks = [...t.matchAll(/(?:☒|☑|✓|✔|\[\s*[xX✓]\s*\])\s*([^☐☒☑\[]{1,60})/g)];
+    if (ticks.length) {
+      const q = clean(t.split(/[☐☒☑✓✔]|\[\s*[xX✓ ]?\s*\]/)[0]);
+      for (const m of ticks) add({ kind: 'check', left: q, right: clean(m[1]).split(/\s{2,}/)[0], value: true }, pi);
+      return;
+    }
+    for (const part of t.split(/\t|\s{3,}/)) {
+      const m = /^([^:]{2,90}):\s*(.+)$/.exec(part.trim());
+      if (m && labelLike(m[1]) && !isBlank(m[2]) && !/_{3,}/.test(m[2])) add({ left: m[1] + ':', value: m[2].trim() }, pi);
+    }
+  });
+  out.forEach((d, i) => (d.id = 'a' + (i + 1)));
+  return out;
+}
+
+function xlsxAnswers(od) {
+  const out = [];
+  for (const sh of od.sheets) {
+    if (sh.state !== 'visible') continue;
+    const cells = [...sh.cells.values()].filter(c => c.text && !sh.hiddenRows.has(c.row));
+    const at = (c, r) => sh.cells.get(c + ',' + r);
+    const rowsOf = r => cells.filter(c => c.row === r).sort((a, b) => a.col - b.col);
+    const rowNums = [...new Set(cells.map(c => c.row))].sort((a, b) => a - b);
+    const heading = r => { const t = rowsOf(r); return t.length === 1 && t[0].text.length <= 80 && (/^\d+[.)]?\s/.test(t[0].text) || t[0].text === t[0].text.toUpperCase()); };
+    const sectionAt = r => { for (let k = r - 1; k >= 1; k--) if (heading(k)) return rowsOf(k)[0].text; return ''; };
+    const ctxAt = r => { const o = []; for (let k = r - 1; k >= 1 && o.length < 8; k--) { const t = rowsOf(k).map(c => c.text).join(' '); if (t) o.push(t.slice(0, 120)); if (heading(k)) break; } return o; };
+    const add = (d, r) => out.push({ kind: 'text', tip: '', left: '', above: '', right: '', inside: '', below: '', nice: '', options: [], page: 0, section: sectionAt(r), ctx: ctxAt(r), where: `${sh.name} · row ${r}`, ...d });
+    const used = new Set();
+    // Header rows over rows of answers.
+    for (const r of rowNums) {
+      // A header row: three or more short labels (two columns is the label | answer layout).
+      const hs = rowsOf(r); if (hs.length < 3 || !hs.every(c => labelLike(c.text) && c.text.length <= 60 && !/^\d/.test(c.text) && !/[:?]\s*$/.test(c.text))) continue;
+      const below = rowsOf(r + 1); if (!below.length || !below.some(c => hs.some(h => h.col === c.col))) continue;
+      if (below.every(c => labelLike(c.text) && /:\s*$/.test(c.text))) continue;
+      used.add(r);
+      for (let k = 1, n = 0; k <= 30; k++) {
+        const row = rowsOf(r + k); if (!row.length) break;
+        if (heading(r + k)) break;
+        n++; used.add(r + k);
+        for (const h of hs) { const c = at(h.col, r + k); if (c?.text && !isBlank(c.text)) add({ above: h.text, nice: `${h.text} ${n}`, value: c.text, ctx: [row[0]?.text, ...ctxAt(r)].filter(Boolean) }, r + k); }
+      }
+    }
+    // Label | answer.
+    for (const r of rowNums) {
+      if (used.has(r) || heading(r)) continue;
+      const row = rowsOf(r);
+      for (let i = 0; i + 1 < row.length; i++) {
+        const l = row[i], v = row[i + 1];
+        if (!labelLike(l.text) || isBlank(v.text) || /[:?]\s*$/.test(v.text)) continue;
+        const merge = sh.merges.find(m => m.cells.some(([c, rr]) => c === l.col && rr === r));
+        const next = (merge ? merge.br[0] : l.col) + 1;
+        if (v.col !== next && !(v.col <= next + 1 && !at(next, r)?.text)) continue;
+        add({ left: l.text, value: v.text }, r); i++;
+      }
+    }
+  }
+  out.forEach((d, i) => (d.id = 'a' + (i + 1)));
+  return out;
+}

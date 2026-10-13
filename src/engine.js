@@ -309,31 +309,3 @@ export async function splitPages(bytes) {
 }
 
 export async function blankPdf(w, h) { const d = await PDFDocument.create(); d.addPage([w, h]); return d.save(); }
-
-export async function samplePdf() {
-  const doc = await PDFDocument.create();
-  const f = await doc.embedFont(StandardFonts.Helvetica), b = await doc.embedFont(StandardFonts.HelveticaBold);
-  const grey = rgb(.38, .4, .39), form = doc.getForm();
-  const p = doc.addPage([595, 842]);
-  p.drawText('Rental Application', { x: 56, y: 770, size: 24, font: b });
-  p.drawText('Harbour Street Apartments  ·  Form RA-2', { x: 56, y: 748, size: 10, font: f, color: grey });
-  p.drawLine({ start: { x: 56, y: 734 }, end: { x: 539, y: 734 }, thickness: .8, color: grey });
-  const tf = (name, label, y, w = 320) => { p.drawText(label, { x: 56, y: y + 25, size: 9.5, font: f, color: grey }); form.createTextField(name).addToPage(p, { x: 56, y, width: w, height: 20, borderColor: grey, borderWidth: .6 }); };
-  tf('Full name', 'Full name', 670); tf('Email', 'Email', 618); tf('Move-in date', 'Move-in date (DD-MM-YYYY)', 566, 170); tf('Monthly income', 'Monthly net income (EUR)', 514, 170);
-  p.drawText('Unit type', { x: 56, y: 487, size: 9.5, font: f, color: grey });
-  const dd = form.createDropdown('Unit type'); dd.addOptions(['Studio', '1 bedroom', '2 bedroom']); dd.addToPage(p, { x: 56, y: 462, width: 170, height: 20, borderColor: grey, borderWidth: .6 });
-  form.createCheckBox('Pets').addToPage(p, { x: 56, y: 420, width: 14, height: 14, borderColor: grey, borderWidth: .8 });
-  p.drawText('I will keep pets in the unit', { x: 78, y: 423, size: 11, font: f });
-  p.drawText('Bank account for deposit refund: NL91 ABNA 0417 1643 00', { x: 56, y: 360, size: 11, font: f });
-  p.drawLine({ start: { x: 56, y: 200 }, end: { x: 300, y: 200 }, thickness: .8, color: rgb(0, 0, 0) });
-  p.drawText('Applicant signature', { x: 56, y: 186, size: 9.5, font: f, color: grey });
-  p.drawLine({ start: { x: 340, y: 200 }, end: { x: 539, y: 200 }, thickness: .8, color: rgb(0, 0, 0) });
-  p.drawText('Date', { x: 340, y: 186, size: 9.5, font: f, color: grey });
-  const p2 = doc.addPage([595, 842]);
-  p2.drawText('Terms', { x: 56, y: 770, size: 20, font: b });
-  ['1. The deposit equals two months of base rent and is held until move-out inspection.', '2. Rent is due on the first working day of each month.', '3. Subletting requires written approval from the landlord.', '4. Either party may end the lease with one full calendar month of notice.']
-    .forEach((t, i) => p2.drawText(t, { x: 56, y: 730 - i * 26, size: 11, font: f, maxWidth: 480 }));
-  p2.drawText('Initials: ______', { x: 56, y: 600, size: 11, font: f });
-  doc.setTitle('Sample rental application'); doc.setAuthor('Harbour Street Apartments');
-  return doc.save();
-}

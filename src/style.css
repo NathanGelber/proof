@@ -378,3 +378,56 @@ details.more > summary { font-family: var(--mono); font-size: 10.5px; text-trans
 #app.nodoc { grid-template-rows: auto minmax(0, 1fr); }
 #app.nodoc .main { grid-template-columns: minmax(0, 1fr); }
 #app.nodoc .tb .grp:has(#bProfile) { border-right: 0; }
+
+/* Workspaces: PDF editor and KYC, switched by the tabs at the left of the toolbar. */
+.modes { display: flex; align-items: stretch; border-right: 1.5px solid var(--ink); }
+.modes button { border: 0; background: transparent; padding: 0 16px; font-family: var(--display); font-weight: 900; font-stretch: 68%; font-size: 17px; letter-spacing: .02em; text-transform: uppercase; color: var(--mute); }
+.modes button:hover:not([aria-selected="true"]) { background: var(--well); color: var(--ink); }
+.modes button[aria-selected="true"] { background: var(--ink); color: var(--bg); }
+#app.m-kyc .pdf-only, #app:not(.m-kyc) .kyc-only { display: none !important; }
+#app.m-kyc:not(.kv-view) .view-only { display: none !important; }
+#app:not(.has-fill) .fill-only { display: none !important; }
+#app.m-kyc { grid-template-rows: auto minmax(0, 1fr); }
+#app.m-kyc .main, #app.m-kyc.nodoc .main { grid-template-columns: 220px minmax(0, 1fr); }
+#app.m-kyc.kv-view .main, #app.m-kyc.kv-office .main { grid-template-columns: 220px minmax(0, 1fr) 380px; }
+#app.m-kyc:not(.kv-view) .view { display: none; }
+#app.m-kyc.kv-view .kpane { display: none; }
+#app.m-kyc:not(.kv-view):not(.kv-office) .kside { display: none; }
+@media (max-width: 1180px) {
+  #app.m-kyc.kv-view .main, #app.m-kyc.kv-office .main { grid-template-columns: 190px minmax(0, 1fr) 330px; }
+  #app.m-kyc .main { grid-template-columns: 190px minmax(0, 1fr); }
+}
+
+.knav { background: var(--chrome); border-right: 1.5px solid var(--ink); overflow-y: auto; display: flex; flex-direction: column; min-height: 0; }
+.knav .kn { border-right: 0; padding: 4px 0 24px; overflow: visible; background: transparent; }
+.knav .kn hr { border: 0; border-top: 1px solid var(--hair); margin: 6px 16px; }
+.knav .kn button.live span { color: var(--accent); }
+.knav .kn button.live[aria-pressed="true"] span { color: inherit; }
+.knav .kn button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kn-h { padding: 12px 16px 10px; border-bottom: 1px solid var(--hair); display: flex; flex-direction: column; gap: 6px; }
+.kn-h h2 { margin: 0; font-family: var(--display); font-weight: 900; font-stretch: 65%; font-size: 30px; line-height: 1; text-transform: uppercase; }
+.kn-h .entsel { width: 100%; font-weight: 600; }
+.kn-st { display: flex; justify-content: space-between; align-items: baseline; font-family: var(--mono); font-size: 10.5px; color: var(--mute); }
+.kpane { background: var(--bg); min-height: 0; }
+.kpane.office { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
+.kpane.office .kfo-doc { flex: 1; min-height: 0; }
+.kfo-bar { display: flex; gap: 14px; align-items: baseline; padding: 10px 16px; border-bottom: 1px solid var(--hair); background: var(--chrome); font-size: 13px; }
+.kfo-bar span { font-family: var(--mono); font-size: 11px; color: var(--mute); }
+.kside { background: var(--chrome); border-left: 1.5px solid var(--ink); overflow-y: auto; padding: 0 16px 24px; min-height: 0; }
+
+.kdrop { border: 2px dashed var(--hair); padding: 28px 24px; display: flex; flex-direction: column; gap: 6px; cursor: pointer; background: var(--chrome); }
+.kdrop:hover, .kdrop:focus-visible { border-color: var(--accent); }
+.kdrop b { font-family: var(--display); font-weight: 800; font-stretch: 75%; font-size: 24px; text-transform: uppercase; }
+.kdrop span { color: var(--mute); }
+.kcard { display: flex; justify-content: space-between; align-items: center; gap: 12px; border: 1.5px solid var(--ink); padding: 10px 12px; }
+.kcard small { display: block; font-family: var(--mono); font-size: 10.5px; color: var(--mute); }
+.krecent { display: flex; flex-direction: column; border-top: 1px solid var(--hair); }
+.krecent div { display: flex; gap: 14px; align-items: baseline; padding: 7px 0; border-bottom: 1px solid var(--hair); }
+.krecent span { font-family: var(--mono); font-size: 11px; color: var(--mute); }
+.kgate { max-width: 560px; }
+.kgate .fld input { width: 100%; }
+.ksteps { margin: 0; padding-left: 20px; color: var(--mute); line-height: 1.7; }
+
+.hv .rv-row.lib { grid-template-columns: 22px minmax(200px, 1.2fr) minmax(200px, 1fr) minmax(170px, 1fr); }
+.rv-ans small.ok { color: var(--f2); }
+.hv-more > summary { font-family: var(--mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: .08em; color: var(--mute); padding: 10px 0; cursor: default; }

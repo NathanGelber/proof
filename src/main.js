@@ -6,11 +6,11 @@ import '@fontsource/mrs-saint-delafield/400.css';
 import './style.css';
 import Sortable from 'sortablejs';
 import * as host from './host.js';
-import { initKyc, formSection, openProfile } from './kyc/ui.js';
+import { initKyc, formSection } from './kyc/ui.js';
 import { startOffice } from './kyc/fill.js';
 import { sigGet, sigSet, sigAvailable } from './kyc/vault.js';
 import { isOfficeName } from './kyc/office.js';
-import { pdfjsLib, mupdf, prepare, inspect, imageToPdf, compose, finalize, renderPngs, splitPages, blankPdf, samplePdf, Cancelled } from './engine.js';
+import { pdfjsLib, mupdf, prepare, inspect, imageToPdf, compose, finalize, renderPngs, splitPages, blankPdf, Cancelled } from './engine.js';
 
 mupdf(); // start loading the engine in the background
 
@@ -238,11 +238,11 @@ function defaultSaveName(suffix = '') {
 function defaultSavePath(name) { return S.path ? host.joinPath(host.dirName(S.path), name) : name; }
 function reportErrs(errs) { if (errs.length) setTimeout(() => toast(errs.slice(0, 2).join(' '), 8000), 3800); }
 
-async function save(as = false) {
+async function save(as = false, suffix = '') {
   if (!S.pages.length) return false;
   if (kycHooks.beforeSave && !(await kycHooks.beforeSave())) return false;
   let path = !as && S.path;
-  if (!path) { path = await host.pickSave(defaultSavePath(defaultSaveName(S.path ? '' : ''))); if (!path) return false; }
+  if (!path) { path = await host.pickSave(defaultSavePath(defaultSaveName(suffix))); if (!path) return false; }
   const b = busy('Saving…');
   try {
     const { bytes, errs } = await produce(S.pages, {}, b);
@@ -987,13 +987,12 @@ function renderEmpty() {
     h('h1', { class: 'mark' }, 'Proof'),
     h('p', {}, 'Combine, reorder and rotate pages. Type, sign and stamp on them, fill forms, redact for real, number and password-protect. Everything stays on this computer.'),
     h('div', { class: 'acts' },
-      h('button', { class: 'btn primary', onclick: doOpen }, 'Open a PDF'),
-      h('button', { class: 'btn', onclick: openSample }, 'Try the sample')),
-    h('p', { class: 'lbl' }, 'Or drop PDFs and images anywhere in this window. Word and Excel forms open straight into Fill from profile.'),
+      h('button', { class: 'btn primary', onclick: doOpen }, 'Open a PDF')),
+    h('p', { class: 'lbl' }, 'Or drop PDFs and images anywhere in this window.'),
+    h('p', {}, 'Filling a KYC or due-diligence form? ', h('button', { class: 'lnk', onclick: () => setMode('kyc') }, 'Use the KYC tab'), '.'),
     recent.length ? h('div', { class: 'fld' }, h('span', { class: 'lbl' }, 'Recent'),
       h('div', { class: 'recent' }, recent.map(p => h('button', { title: p, onclick: () => openPaths([p], 'open') }, h('b', {}, host.baseName(p)), h('span', {}, host.dirName(p)))))) : null));
 }
-async function openSample() { await openEntries([{ name: 'Sample rental application.pdf', path: null, type: 'application/pdf', bytes: await samplePdf(), sample: true }]); S.dirty = false; updateChrome(); }
 
 // ---------------------------------------------------------------- chrome
 function updateChrome() {
@@ -1013,7 +1012,23 @@ function updateChrome() {
 }
 /** With nothing open, only what works without a document is shown. Set before layout, so page fit uses the real width. */
 function setDocMode() { $('#app').classList.toggle('nodoc', !S.pages.length); }
-function renderAll() { setDocMode(); renderThumbs(); layoutView(); renderTabs(); renderInsp(); updateChrome(); }
+function renderAll() { setDocMode(); kycHooks.layout?.(); renderThumbs(); layoutView(); renderTabs(); renderInsp(); updateChrome(); }
+
+// ---------------------------------------------------------------- workspaces: PDF editor and KYC
+const MODE_KEY = 'proof.mode';
+let mode = 'pdf';
+/** Switch between the PDF editor and the KYC workspace. Both work on the same open document. */
+function setMode(m) {
+  mode = m === 'kyc' ? 'kyc' : 'pdf';
+  $('#app').classList.toggle('m-kyc', mode === 'kyc');
+  $$('.modes button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.m === mode)));
+  try { localStorage.setItem(MODE_KEY, mode); } catch {}
+  if (mode === 'pdf') setTool('select');
+  kycHooks.layout?.();
+  kycHooks.show?.();
+  layoutView(); renderInsp(); updateChrome();
+}
+$$('.modes button').forEach(b => (b.onclick = () => setMode(b.dataset.m)));
 
 // ---------------------------------------------------------------- commands & keys
 async function doOpen() { const e = await host.pickOpen(); if (e.length) openEntries(e); }
@@ -1027,8 +1042,9 @@ async function doInsert() { if (!S.pages.length) return doOpen(); const e = awai
 $('#bOpen').onclick = doOpen; $('#bClose').onclick = closeDoc; $('#bInsert').onclick = doInsert;
 $('#bSave').onclick = () => save(false); $('#bSaveAs').onclick = () => save(true);
 $('#bUndo').onclick = undo; $('#bRedo').onclick = redo;
-$('#bProfile').onclick = () => openProfile();
-$('#bFill').onclick = () => kycHooks.fillNow?.();
+$('#kOpen').onclick = () => kycHooks.fillNow?.(true);
+$('#kSave').onclick = () => kycHooks.saveForm?.();
+$('#kClose').onclick = () => kycHooks.closeForm?.();
 
 /** Type answers onto pages of a document (flat forms). y is the baseline of the first line. Caller commits. Returns the new items' ids. */
 function placeText(doc, items) {
@@ -1066,19 +1082,22 @@ const kycText = {
   pos(id) { const { p, it } = findText(id); if (!it) return null; return { page: p.idx, x: it.x, y: it.y + (1.2 * it.text.split('\n').length - 0.95) * it.size, size: it.size }; },
   select(id) { const { p, it } = findText(id); if (!it) return; revealRect(p.doc, p.idx, [it.x, it.y, 10, it.size]); selectItem(p.uid, id); },
 };
-initKyc({ S, h, sec, modal, toast, busy, commit: () => commit(), renderInsp, updateChrome, insertEntries, openEntries, placeText, hooks: kycHooks, redrawDoc, revealRect, text: kycText, setTab: t => { S.itab = t; renderTabs(); renderInsp(); } });
+initKyc({ S, h, sec, modal, toast, busy, commit: () => commit(), renderInsp, updateChrome, insertEntries, openEntries, placeText, hooks: kycHooks, redrawDoc, revealRect, text: kycText, setTab: t => { S.itab = t; renderTabs(); renderInsp(); }, setMode, mode: () => mode, save: () => save(false), saveCopy: suffix => save(true, suffix), closeDoc, relayout: () => layoutView() });
 
 document.addEventListener('keydown', e => {
   // Keep webview browser shortcuts (reload, print the app UI, find bar) from firing in a desktop app.
   if (e.key === 'F5' || ((e.ctrlKey || e.metaKey) && ['p', 'f', 'g', 'u', 'j'].includes(e.key.toLowerCase()))) { e.preventDefault(); return; }
-  if ($('.scrim') || $('.busy') || $('.kyc') || $('.kfo')) return;
+  if ($('.scrim') || $('.busy')) return;
+  // In the KYC workspace only document shortcuts apply, and zoom/undo only while a PDF form is on screen.
+  if (mode === 'kyc' && !(e.ctrlKey || e.metaKey)) return;
+  if (mode === 'kyc' && !$('#app').classList.contains('kv-view') && !['s', 'w', 'o'].includes(e.key.toLowerCase())) return;
   if (menuEl && e.key === 'Escape') { closeMenu(); return; }
   const mod = e.ctrlKey || e.metaKey, k = e.key.toLowerCase();
   if (mod) {
-    if (k === 'o') { e.preventDefault(); doOpen(); return; }
-    if (k === 'w') { e.preventDefault(); closeDoc(); return; }
+    if (k === 'o') { e.preventDefault(); mode === 'kyc' ? kycHooks.fillNow?.(true) : doOpen(); return; }
+    if (k === 'w') { e.preventDefault(); mode === 'kyc' ? kycHooks.closeForm?.() : closeDoc(); return; }
     if (k === 'i') { e.preventDefault(); doInsert(); return; }
-    if (k === 's') { e.preventDefault(); save(e.shiftKey); return; }
+    if (k === 's') { e.preventDefault(); mode === 'kyc' ? kycHooks.saveForm?.() : save(e.shiftKey); return; }
     if (k === '=' || k === '+') { e.preventDefault(); zoomStep(1); return; }
     if (k === '-') { e.preventDefault(); zoomStep(-1); return; }
     if (k === '0') { e.preventDefault(); setZoom('fit'); return; }
@@ -1111,7 +1130,7 @@ document.addEventListener('keydown', e => {
 
 // ---------------------------------------------------------------- startup
 let dropEl = null;
-host.onDrop(entries => { if (!entries.length) return; S.pages.length ? insertEntries(entries) : openEntries(entries); },
+host.onDrop(entries => { if (!entries.length) return; if (mode === 'kyc') return kycHooks.drop?.(entries); S.pages.length ? insertEntries(entries) : openEntries(entries); },
   on => { if (on && !dropEl) { dropEl = h('div', { class: 'dropover' }, h('span', {}, S.pages.length ? 'Drop to insert' : 'Drop to open')); document.body.append(dropEl); } else if (!on) { dropEl?.remove(); dropEl = null; } });
 const closeHandler = async () => {
   if (!S.dirty) return true;
@@ -1124,7 +1143,8 @@ closeHandler.dirty = () => S.dirty;
 host.onCloseRequested(closeHandler);
 host.onOpenFiles(paths => openPaths(paths, 'ask'));
 
+try { if (localStorage.getItem(MODE_KEY) === 'kyc') setMode('kyc'); } catch {}
 renderAll();
 const launch = await host.launchFiles();
 if (launch.length) openPaths(launch, 'open');
-if (!host.isDesktop) window.__proof = { S, openEntries, insertEntries, samplePdf, produce };
+if (!host.isDesktop) window.__proof = { S, openEntries, insertEntries, produce, setMode };
