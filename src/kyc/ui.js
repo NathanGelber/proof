@@ -234,7 +234,7 @@ function unlockCard() {
 
 function setupCard() {
   const { h } = C; let path = null;
-  const name = h('input', { type: 'text', id: 'ks-ent', placeholder: 'e.g. Gelber Coöperatief U.A.' });
+  const name = h('input', { type: 'text', id: 'ks-ent' });
   const p1 = h('input', { type: 'password', id: 'ks-p1', autocomplete: 'new-password' }), p2 = h('input', { type: 'password', id: 'ks-p2', autocomplete: 'new-password' });
   const where = h('span', { class: 'hint' }, K.info?.path || '');
   const msg = h('p', { class: 'msg', role: 'alert' });
@@ -448,7 +448,7 @@ function docsView(ent) {
 // ---- custom items
 function customView(ent) {
   const { h } = C;
-  const label = h('input', { type: 'text', id: 'cu-l', placeholder: 'e.g. DNB relation number' });
+  const label = h('input', { type: 'text', id: 'cu-l' });
   const kind = h('select', { id: 'cu-k' }, [['text', 'Text'], ['longtext', 'Long text'], ['date', 'Date'], ['country', 'Country'], ['bool', 'Yes / no'], ['number', 'Number']].map(([k, l]) => h('option', { value: k }, l)));
   const scope = h('select', { id: 'cu-s' }, h('option', { value: 'e' }, 'The entity'), h('option', { value: 'p' }, 'Each person'));
   const aliases = h('input', { type: 'text', id: 'cu-a', placeholder: 'Other wordings forms use, separated by commas' });

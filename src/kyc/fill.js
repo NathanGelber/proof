@@ -548,7 +548,7 @@ function drawMarks(p, v) {
 function askCounterparty(ses) {
   const { h, modal } = C;
   return new Promise(resolve => {
-    const inp = h('input', { type: 'text', id: 'cp-in', placeholder: 'e.g. ABN AMRO Clearing', value: ses.counterparty || '' });
+    const inp = h('input', { type: 'text', id: 'cp-in', value: ses.counterparty || '' });
     const m = modal('Who is this for?',
       h('p', { class: 'hint' }, 'For your fill record. Asked once per form.'),
       h('label', { class: 'fld', for: 'cp-in' }, h('span', { class: 'lbl' }, 'Counterparty'), inp),

@@ -304,9 +304,9 @@ mod tests {
     #[test]
     fn scrubs_form_text() {
         let req: MatchRequest = serde_json::from_str(r#"{"model":"claude-sonnet-5-5","mode":"fields","keys":[{"key":"legal_name","label":"Legal name","kind":"text"}],
-            "fields":[{"id":"f1","kind":"text","name":"Text1","near":"Company name (prefilled: Gelber Cooperatief UA)"}]}"#).unwrap();
-        let (m, n) = build(&req, &Scrubber::from_profile(r#"{"entities":[{"name":"Gelber Coöperatief U.A.","values":{}}]}"#));
-        assert!(!m.contains("Gelber"), "{m}");
+            "fields":[{"id":"f1","kind":"text","name":"Text1","near":"Company name (prefilled: Northwind Holding BV)"}]}"#).unwrap();
+        let (m, n) = build(&req, &Scrubber::from_profile(r#"{"entities":[{"name":"Northwind Holding B.V.","values":{}}]}"#));
+        assert!(!m.contains("Northwind"), "{m}");
         assert!(n >= 1);
     }
 }

@@ -4,7 +4,7 @@
 //! Matching ignores case, spacing and punctuation, so "NL 1234.56.789" in a form label is
 //! caught by a stored "nl123456789". Short and long values are handled differently: a value of
 //! up to six words (a name, an address line, an identifier) is also matched word by word, so
-//! "Gelber" alone is caught when "Gelber Coöperatief U.A." is stored.
+//! "Northwind" alone is caught when "Northwind Holding B.V." is stored.
 
 use serde_json::Value;
 
@@ -26,7 +26,7 @@ pub struct Scrubber {
     needles: Vec<Vec<char>>,
 }
 
-/// Lowercase and drop accents, so "Coöperatief" and "Cooperatief" compare equal.
+/// Lowercase and drop accents, so "Société" and "Societe" compare equal.
 fn fold(c: char) -> impl Iterator<Item = char> {
     c.to_lowercase().map(|l| match l {
         'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' => 'a',
@@ -193,7 +193,7 @@ impl Scrubber {
 mod tests {
     use super::*;
 
-    const P: &str = r#"{"entities":[{"name":"Gelber Coöperatief U.A.","values":{
+    const P: &str = r#"{"entities":[{"name":"Northwind Holding B.V.","values":{
         "kvk":{"v":"NL 8123.4567"},"incorporated":{"v":"2019-03-14"},
         "pep":{"v":"no"},"country":{"v":"NL","e":true},
         "street":{"v":"Herengracht 500","hist":[{"v":"Keizersgracht 12"}]}},
@@ -203,8 +203,8 @@ mod tests {
     #[test]
     fn removes_values_and_variants() {
         let s = Scrubber::from_profile(P);
-        let (o, n) = s.scrub("Company: Gelber Coöperatief U.A., reg no nl81234567, founded 14/03/2019");
-        assert!(!o.to_lowercase().contains("gelber"), "{o}");
+        let (o, n) = s.scrub("Company: Northwind Holding B.V., reg no nl81234567, founded 14/03/2019");
+        assert!(!o.to_lowercase().contains("northwind"), "{o}");
         assert!(!o.contains("8123"), "{o}");
         assert!(!o.contains("2019"), "{o}");
         assert!(n >= 3);
