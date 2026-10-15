@@ -84,6 +84,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); outline: n
 .pv .stamps .wm { color: #808080; transform: translate(-50%, -50%) rotate(-45deg); }
 .pv .pn { position: absolute; left: -2px; top: -18px; font-family: var(--mono); font-size: 10px; color: var(--mute); }
 .view.place .pv { cursor: crosshair; }
+.view.pan-ready, .view.pan-ready * { cursor: grab !important; }
+.view.panning, .view.panning * { cursor: grabbing !important; user-select: none; }
 .pv .layer { pointer-events: none; }
 .pv .layer > * { pointer-events: auto; }
 .view.place .textLayer, .view.place .links, .view.place .forms { pointer-events: none; }

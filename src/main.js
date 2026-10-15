@@ -470,6 +470,36 @@ $('#zLbl').onclick = () => setZoom(S.zoom === 'fit' ? 'page' : S.zoom === 'page'
 view.addEventListener('wheel', e => { if (!e.ctrlKey) return; e.preventDefault(); zoomStep(e.deltaY < 0 ? 1 : -1); }, { passive: false });
 let rzT; new ResizeObserver(() => { clearTimeout(rzT); rzT = setTimeout(() => { if (S.zoom === 'fit' || S.zoom === 'page') layoutView(); }, 120); }).observe(view);
 
+// Pan the page view: hold Space and drag, or drag with the middle mouse button.
+let spaceHeld = false, pan = null;
+const viewShown = () => S.pages.length && (mode === 'pdf' || $('#app').classList.contains('kv-view'));
+const setSpace = on => { spaceHeld = on; view.classList.toggle('pan-ready', on); };
+document.addEventListener('keydown', e => {
+  if (e.code !== 'Space' || e.ctrlKey || e.metaKey || e.altKey) return;
+  const a = document.activeElement;
+  if (typing() || a?.isContentEditable || a?.tagName === 'BUTTON' || $('.scrim') || $('.busy') || !viewShown()) return;
+  e.preventDefault(); e.stopImmediatePropagation();
+  if (!e.repeat && !spaceHeld) setSpace(true);
+}, true);
+document.addEventListener('keyup', e => { if (e.code === 'Space' && spaceHeld) { e.preventDefault(); setSpace(false); } }, true);
+window.addEventListener('blur', () => { setSpace(false); if (pan) endPan(); });
+view.addEventListener('pointerdown', e => {
+  if (!(e.button === 1 || (e.button === 0 && spaceHeld))) return;
+  e.preventDefault(); e.stopPropagation();
+  pan = { id: e.pointerId, x: e.clientX, y: e.clientY, sl: view.scrollLeft, st: view.scrollTop };
+  view.setPointerCapture(e.pointerId); view.classList.add('panning');
+}, true);
+view.addEventListener('pointermove', e => {
+  if (!pan || e.pointerId !== pan.id) return;
+  view.scrollLeft = pan.sl - (e.clientX - pan.x); view.scrollTop = pan.st - (e.clientY - pan.y);
+});
+function endPan() { try { view.releasePointerCapture(pan.id); } catch {} pan = null; view.classList.remove('panning'); }
+view.addEventListener('pointerup', e => { if (pan && e.pointerId === pan.id) endPan(); });
+view.addEventListener('pointercancel', e => { if (pan && e.pointerId === pan.id) endPan(); });
+// The middle button would otherwise start the webview's autoscroll, and a click would open links.
+view.addEventListener('mousedown', e => { if (e.button === 1) e.preventDefault(); });
+view.addEventListener('auxclick', e => { if (e.button === 1) e.preventDefault(); });
+
 function scrollToPage(u) { const v = pvs.get(u); if (v?.el.isConnected) view.scrollTop = v.el.offsetTop - 16; }
 let scT;
 view.addEventListener('scroll', () => {
@@ -1435,10 +1465,11 @@ const closeHandler = async () => {
 };
 closeHandler.dirty = () => S.dirty;
 host.onCloseRequested(closeHandler);
-host.onOpenFiles(paths => openPaths(paths, 'ask'));
+// A PDF opened from Explorer (double-click, Open with) always lands in the PDF editor.
+host.onOpenFiles(paths => { if (mode !== 'pdf') setMode('pdf'); openPaths(paths, 'ask'); });
 
 try { if (localStorage.getItem(MODE_KEY) === 'kyc') setMode('kyc'); } catch {}
 renderAll();
 const launch = await host.launchFiles();
-if (launch.length) openPaths(launch, 'open');
+if (launch.length) { if (mode !== 'pdf') setMode('pdf'); openPaths(launch, 'open'); }
 if (!host.isDesktop) window.__proof = { S, openEntries, insertEntries, produce, setMode };
