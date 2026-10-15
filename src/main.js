@@ -433,7 +433,7 @@ function layoutView(keepAnchor = true) {
     if (el) { view.scrollTop = el.offsetTop + anchor.ratio * el.offsetHeight; view.scrollLeft = el.offsetLeft + el.offsetWidth / 2 - view.clientWidth / 2; }
   }
   for (const p of S.pages) if (pvs.get(p.uid).visible) queueRender(p.uid);
-  $('#zLbl').textContent = S.zoom === 'fit' ? 'Width' : S.zoom === 'page' ? 'Page' : Math.round(S.zoom * 100) + '%';
+  $('#zLbl').textContent = Math.round(scale / PT * 100) + '%';
 }
 const renderKey = (p, scale) => `${scale.toFixed(4)}|${p.rot}|${DPR()}|${formMode(p) ? 'f' : 'a'}`;
 const rq = []; let rBusy = false;
@@ -466,18 +466,31 @@ const zoomNow = () => scaleNow() / PT;
 const ZSTEPS = [0.25, 0.33, 0.5, 0.67, 0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4];
 const zoomStep = dir => { const z = zoomNow(); setZoom(dir > 0 ? ZSTEPS.find(s => s > z + 0.001) || 4 : [...ZSTEPS].reverse().find(s => s < z - 0.001) || 0.25); };
 $('#zIn').onclick = () => zoomStep(1); $('#zOut').onclick = () => zoomStep(-1);
-$('#zLbl').onclick = () => setZoom(S.zoom === 'fit' ? 'page' : S.zoom === 'page' ? 1 : 'fit');
+$('#zLbl').onclick = e => {
+  const r = e.currentTarget.getBoundingClientRect(), on = z => (S.zoom === z ? '✓ ' : '');
+  showMenu(r.left, r.bottom + 2, [
+    { label: on('page') + 'Fit page', kbd: 'Ctrl+0', action: () => setZoom('page') },
+    { label: on('fit') + 'Fit width', kbd: 'Ctrl+2', action: () => setZoom('fit') },
+    '-',
+    ...[0.5, 0.75, 1, 1.25, 1.5, 2].map(z => ({ label: on(z) + Math.round(z * 100) + '%', kbd: z === 1 ? 'Ctrl+1' : null, action: () => setZoom(z) })),
+  ], e.currentTarget);
+};
 view.addEventListener('wheel', e => { if (!e.ctrlKey) return; e.preventDefault(); zoomStep(e.deltaY < 0 ? 1 : -1); }, { passive: false });
 let rzT; new ResizeObserver(() => { clearTimeout(rzT); rzT = setTimeout(() => { if (S.zoom === 'fit' || S.zoom === 'page') layoutView(); }, 120); }).observe(view);
 
 // Pan the page view: hold Space and drag, or drag with the middle mouse button.
-let spaceHeld = false, pan = null;
+let spaceHeld = false, pan = null, overView = false;
+view.addEventListener('pointerenter', () => { overView = true; });
+view.addEventListener('pointerleave', () => { overView = false; });
 const viewShown = () => S.pages.length && (mode === 'pdf' || $('#app').classList.contains('kv-view'));
 const setSpace = on => { spaceHeld = on; view.classList.toggle('pan-ready', on); };
 document.addEventListener('keydown', e => {
   if (e.code !== 'Space' || e.ctrlKey || e.metaKey || e.altKey) return;
   const a = document.activeElement;
-  if (typing() || a?.isContentEditable || a?.tagName === 'BUTTON' || $('.scrim') || $('.busy') || !viewShown()) return;
+  if (typing() || a?.isContentEditable || $('.scrim') || $('.busy') || !viewShown()) return;
+  // A focused button would be clicked by Space, so it only pans while the pointer is over the pages.
+  if (a?.tagName === 'BUTTON' && a.closest('.menu')) return;
+  if (a?.tagName === 'BUTTON' || a?.getAttribute('role') === 'tab') { if (!overView) return; a.blur(); }
   e.preventDefault(); e.stopImmediatePropagation();
   if (!e.repeat && !spaceHeld) setSpace(true);
 }, true);
