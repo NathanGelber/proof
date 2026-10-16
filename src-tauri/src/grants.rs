@@ -41,10 +41,23 @@ impl Grants {
     pub fn may_read(&self, p: &Path) -> bool {
         self.has_file(p)
     }
-    /// A granted file, or a file directly inside a granted folder.
+    /// A granted file, or a new PDF or PNG directly inside a granted folder. A folder grant never
+    /// lets the page replace a file that's already there; once Proof has written a file, that file
+    /// is granted, so exporting to the same folder again in the same session still works.
     pub fn may_write(&self, p: &Path) -> bool {
-        self.has_file(p) || p.parent().map(|d| self.has_dir(d)).unwrap_or(false)
+        if self.has_file(p) {
+            return true;
+        }
+        let in_dir = p.parent().map(|d| self.has_dir(d)).unwrap_or(false);
+        let ext = p.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).unwrap_or_default();
+        in_dir && DIR_EXT.contains(&ext.as_str()) && std::fs::symlink_metadata(p).is_err()
     }
+}
+
+/// What may be created in a folder chosen with the folder dialog: split pages and page images.
+const DIR_EXT: &[&str] = &["pdf", "png"];
+
+impl Grants {
 }
 
 // ---------------------------------------------------------------- recent files
@@ -100,6 +113,24 @@ mod tests {
         assert!(!g.may_read(Path::new("/home/me/Out/p-001.pdf")));
         assert!(!g.may_write(Path::new("/home/me/Out/sub/p-001.pdf")));
         assert!(!g.may_write(Path::new("/home/me/p-001.pdf")));
+        assert!(!g.may_write(Path::new("/home/me/Out/form.docm")));
+        assert!(!g.may_write(Path::new("/home/me/Out/x.json")));
+    }
+
+    #[test]
+    fn folder_grant_never_overwrites() {
+        let d = std::env::temp_dir().join(format!("proof-grants-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let existing = d.join("old.pdf");
+        std::fs::write(&existing, b"x").unwrap();
+        let g = Grants::default();
+        g.dir(&d);
+        assert!(!g.may_write(&existing));
+        assert!(g.may_write(&d.join("new.pdf")));
+        g.file(&existing);
+        assert!(g.may_write(&existing));
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

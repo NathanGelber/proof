@@ -174,7 +174,10 @@ async function openEntries(entries) {
   const single = loaded.length === 1 && first.path && /\.pdf$/i.test(first.path);
   S.path = single ? first.path : null;
   S.title = single ? first.name : loaded.length === 1 ? loaded[0].name.replace(/\.(png|jpe?g)$/i, '.pdf') : 'Combined.pdf';
-  if (loaded.length === 1 && loaded[0].password) { S.opts.password = loaded[0].password; notes.push('Saving keeps the same open password. Change it under Document.'); }
+  if (loaded.length === 1 && loaded[0].password) {
+    if (loaded[0].password.includes(',')) notes.push('This file’s password has a comma, which Proof can’t save with. Set a new password under Document, or it saves without one.');
+    else { S.opts.password = loaded[0].password; notes.push('Saving keeps the same open password. Change it under Document.'); }
+  }
   for (const e of entries) host.addRecent(e.path);
   S.cur = S.pages[0]?.uid || null; S.dirty = loaded.length > 1 || !single;
   S.zoom = 'fit'; renderAll(); $('#view').scrollTop = 0;

@@ -108,6 +108,9 @@ fn write_file(grants: tauri::State<Grants>, request: Request) -> Result<(), Stri
     let path = percent_decode(raw);
     let p = checked_path(&path, WRITE_EXT)?;
     if !grants.may_write(&p) {
+        if !grants.has_file(&p) && p.exists() {
+            return Err(format!("{path} already exists. Choose an empty folder, or delete the old files first."));
+        }
         return Err(format!("Proof won't save to {path}: that location wasn't chosen in Proof."));
     }
     let InvokeBody::Raw(bytes) = request.body() else {
@@ -121,6 +124,8 @@ fn write_file(grants: tauri::State<Grants>, request: Request) -> Result<(), Stri
             "Couldn't replace {path}: {e}. Is it open in another program?"
         ));
     }
+    // Proof made this file, so it may write it again (e.g. exporting to the same folder twice).
+    grants.file(&p);
     Ok(())
 }
 
@@ -397,7 +402,7 @@ fn match_preview(state: tauri::State<VaultState>, request: matcher::MatchRequest
     if !v.check() {
         return Err("LOCKED: Unlock the profile first.".into());
     }
-    Ok(matcher::preview(&request, v.data().unwrap_or_default()))
+    matcher::preview(&request, v.data().unwrap_or_default())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

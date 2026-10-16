@@ -244,39 +244,62 @@ async function drawOverlays(out, outPages, pages, stamps, errs, prog) {
 /** Full pipeline: assemble → (redact → overlay) → compress / encrypt / strip. */
 export async function compose(pages, { flatten, strip, stamps, compress, password }, prog) {
   const hasRed = pages.some(p => p.items.some(i => i.type === 'redact'));
+  // A redacted file never keeps its metadata: title, subject, keywords and XMP can repeat what was blacked out.
+  if (hasRed) strip = true;
   let { bytes, errs, redactions } = await build(pages, { flatten: flatten || hasRed, strip, stamps, overlays: !hasRed }, prog);
   if (redactions.length) {
     prog?.('Redacting…');
-    bytes = await finalize(bytes, { redactions, compress: false, strip: false });
-    const o = await overlay(bytes, pages, { stamps, strip }, prog); bytes = o.bytes; errs = errs.concat(o.errs);
+    const notes = [];
+    bytes = await finalize(bytes, { redactions, compress: false, strip: true, notes });
+    const o = await overlay(bytes, pages, { stamps, strip }, prog); bytes = o.bytes; errs = errs.concat(notes, o.errs);
   }
   prog?.('Finishing…');
   return { bytes: await finalize(bytes, { compress, password, strip }), errs };
 }
 
-/** MuPDF pass: true redaction, cleanup/compression, encryption, metadata removal. */
-export async function finalize(bytes, { redactions = [], compress = true, password = '', strip = true }) {
-  if (!redactions.length && !compress && !password && !strip) return bytes;
+/** MuPDF splits its save options on commas, so a comma in a password would cut it short or add an option. */
+export function checkPassword(pw) {
+  if (pw && pw.includes(',')) throw new Error('Passwords can’t contain commas. Change it under Document.');
+}
+
+const overlaps = (a, b) => a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+
+/**
+ * MuPDF pass: true redaction, cleanup/compression, encryption, metadata removal.
+ * Always rewrites the file and drops unreferenced objects, so deleted pages, unlinked metadata
+ * and earlier revisions never survive in what's saved. notes: optional array for warnings.
+ */
+export async function finalize(bytes, { redactions = [], compress = true, password = '', strip = true, notes = null }) {
+  checkPassword(password);
   const mu = await mupdf();
   const doc = mu.Document.openDocument(bytes, 'application/pdf');
   try {
     for (const { k, rects } of redactions) {
       const pg = doc.loadPage(k); const m = pg.getTransform();
       const tp = (x, y) => [x * m[0] + y * m[2] + m[4], x * m[1] + y * m[3] + m[5]];
-      for (const [x0, y0, x1, y1] of rects) {
+      const boxes = rects.map(([x0, y0, x1, y1]) => {
         const a = tp(x0, y0), b = tp(x1, y1);
-        const an = pg.createAnnotation('Redact');
-        an.setRect([Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])]);
+        return [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])];
+      });
+      // Comments, notes, links and other annotations under a box go with it: applyRedactions leaves
+      // some of them (sticky notes) in place with their text. Form fields were flattened before this.
+      for (const an of pg.getAnnotations()) {
+        if (an.getType() === 'Redact') continue;
+        if (boxes.some(bx => overlaps(an.getRect(), bx))) pg.deleteAnnotation(an);
       }
+      for (const bx of boxes) pg.createAnnotation('Redact').setRect(bx);
       pg.applyRedactions(true, 2);
+    }
+    if (redactions.length && notes) {
+      let outline = []; try { outline = doc.loadOutline() || []; } catch {}
+      if (outline.length) notes.push('This file has bookmarks. Their titles aren’t redacted; check they don’t name what you blacked out.');
     }
     if (strip) {
       try { doc.getTrailer().delete('Info'); } catch {}
       try { doc.getTrailer().get('Root').delete('Metadata'); } catch {}
     }
-    const opts = [];
-    if (compress) opts.push('garbage=deduplicate', 'compress');
-    else if (redactions.length) opts.push('garbage=compact');
+    const opts = [compress ? 'garbage=deduplicate' : 'garbage=compact'];
+    if (compress) opts.push('compress');
     if (password) {
       const owner = Array.from(crypto.getRandomValues(new Uint8Array(18)), b => b.toString(16).padStart(2, '0')).join('');
       opts.push('encrypt=aes-256', `user-password=${password}`, `owner-password=${owner}`);

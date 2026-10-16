@@ -180,9 +180,36 @@ fn tool(mode: &str) -> Value {
     })
 }
 
-/// Build the user message. Every string from the form goes through the scrubber.
+/// Identifiers are sent unscrubbed, so they must look like identifiers and nothing else:
+/// field ids ("f12", "a3", "L2-14"), kinds ("text", "check") and profile keys ("ubo",
+/// "{role}.N.full_name", "x_tax_ref_ab12").
+fn ident(s: &str, max: usize, extra: &[char]) -> bool {
+    !s.is_empty() && s.len() <= max && s.chars().all(|c| c.is_ascii_alphanumeric() || extra.contains(&c))
+}
+
+fn validate(req: &MatchRequest) -> Result<(), String> {
+    let bad = |what: &str, v: &str| Err(format!("Not sent: {what} {:?} isn't a plain identifier.", clip(v, 40)));
+    for k in &req.keys {
+        if !ident(&k.key, 80, &['_', '.', '{', '}', '-']) { return bad("key", &k.key); }
+        if !ident(&k.kind, 20, &['_']) { return bad("kind", &k.kind); }
+    }
+    for f in &req.fields {
+        if !ident(&f.id, 20, &['-', '_']) { return bad("field id", &f.id); }
+        if !ident(&f.kind, 10, &['_']) { return bad("field kind", &f.kind); }
+    }
+    for l in &req.lines {
+        if !ident(&l.id, 20, &['-', '_']) { return bad("line id", &l.id); }
+    }
+    Ok(())
+}
+
+/// Build the user message. Every string from the form goes through the scrubber. Identifiers
+/// are validated first; a profile key that contains a profile value (a custom item named after
+/// the company, say) is left out of the list rather than sent.
 fn build(req: &MatchRequest, s: &Scrubber) -> (String, usize) {
     let mut removed = 0;
+    let mut dropped = 0;
+    let key_ok = |k: &str| s.scrub(&k.replace(['_', '.'], " ")).1 == 0;
     let mut sc = |t: &str, n: usize| {
         let (o, k) = s.scrub(&clip(t, n));
         let (o, m) = mask(&o);
@@ -195,7 +222,11 @@ fn build(req: &MatchRequest, s: &Scrubber) -> (String, usize) {
     }
     out.push_str("Profile keys (key | name | type | choices):\n");
     for k in &req.keys {
-        let ch = if k.choices.is_empty() { String::new() } else { format!(" | {}", k.choices.iter().map(|c| sc(c, 60)).collect::<Vec<_>>().join(" / ")) };
+        if !key_ok(&k.key) {
+            dropped += 1;
+            continue;
+        }
+        let ch =if k.choices.is_empty() { String::new() } else { format!(" | {}", k.choices.iter().map(|c| sc(c, 60)).collect::<Vec<_>>().join(" / ")) };
         out.push_str(&format!("{} | {} | {}{}\n", clip(&k.key, 80), sc(&k.label, 120), clip(&k.kind, 20), ch));
     }
     if req.mode == "lines" {
@@ -213,13 +244,14 @@ fn build(req: &MatchRequest, s: &Scrubber) -> (String, usize) {
             ));
         }
     }
-    (out, removed)
+    (out, removed + dropped)
 }
 
 pub async fn run(req: MatchRequest, profile_json: &str) -> Result<MatchResult, String> {
     if !MODELS.contains(&req.model.as_str()) {
         return Err(format!("Unknown model {}", req.model));
     }
+    validate(&req)?;
     let key = api_key().ok_or("NOKEY: No Anthropic API key is set. Add one under Profile → Settings.")?;
     let mut scrubber = Scrubber::from_profile(profile_json);
     scrubber.add_terms(&req.avoid);
@@ -264,11 +296,12 @@ pub async fn run(req: MatchRequest, profile_json: &str) -> Result<MatchResult, S
 }
 
 /// What would be sent, for the "show me exactly what goes out" button.
-pub fn preview(req: &MatchRequest, profile_json: &str) -> (String, usize) {
+pub fn preview(req: &MatchRequest, profile_json: &str) -> Result<(String, usize), String> {
+    validate(req)?;
     let mut s = Scrubber::from_profile(profile_json);
     s.add_terms(&req.avoid);
     let (m, n) = build(req, &s);
-    (format!("SYSTEM\n{}\n\nUSER\n{}", system_prompt(), m), n)
+    Ok((format!("SYSTEM\n{}\n\nUSER\n{}", system_prompt(), m), n))
 }
 
 #[cfg(test)]
@@ -302,6 +335,29 @@ mod tests {
     }
 
     #[test]
+    fn identifiers_must_be_identifiers() {
+        let ok: MatchRequest = serde_json::from_str(r#"{"model":"claude-sonnet-5-5","mode":"lines","keys":[{"key":"{role}.N.full_name","label":"Full name","kind":"text"},{"key":"x_tax_ref_ab12","label":"Tax ref","kind":"text"}],"lines":[{"id":"L2-14","page":1,"text":"Name:"}]}"#).unwrap();
+        assert!(validate(&ok).is_ok());
+        for bad in [
+            r#"{"model":"claude-sonnet-5-5","mode":"fields","keys":[{"key":"legal_name Northwind Holding BV","label":"x","kind":"text"}]}"#,
+            r#"{"model":"claude-sonnet-5-5","mode":"fields","keys":[{"key":"k","label":"x","kind":"Jan de Vries"}]}"#,
+            r#"{"model":"claude-sonnet-5-5","mode":"fields","keys":[],"fields":[{"id":"NL91ABNA 04171643","kind":"text"}]}"#,
+            r#"{"model":"claude-sonnet-5-5","mode":"lines","keys":[],"lines":[{"id":"a b","page":1,"text":"x"}]}"#,
+        ] {
+            let r: MatchRequest = serde_json::from_str(bad).unwrap();
+            assert!(validate(&r).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn drops_keys_named_after_profile_values() {
+        let req: MatchRequest = serde_json::from_str(r#"{"model":"claude-sonnet-5-5","mode":"fields","keys":[{"key":"legal_name","label":"Legal name","kind":"text"},{"key":"x_northwind_ref_ab12","label":"Reference","kind":"text"}]}"#).unwrap();
+        let (m, n) = build(&req, &Scrubber::from_profile(r#"{"entities":[{"name":"Northwind Holding B.V.","values":{}}]}"#));
+        assert!(!m.to_lowercase().contains("northwind"), "{m}");
+        assert!(m.contains("legal_name") && n >= 1);
+    }
+
+    #[test]
     fn scrubs_form_text() {
         let req: MatchRequest = serde_json::from_str(r#"{"model":"claude-sonnet-5-5","mode":"fields","keys":[{"key":"legal_name","label":"Legal name","kind":"text"}],
             "fields":[{"id":"f1","kind":"text","name":"Text1","near":"Company name (prefilled: Northwind Holding BV)"}]}"#).unwrap();
@@ -318,6 +374,6 @@ mod show {
     fn print_prompt() {
         let req: super::MatchRequest = serde_json::from_str(r#"{"model":"claude-sonnet-5-5","mode":"fields","title":"cdd.pdf","keys":[{"key":"legal_name","label":"Legal name","kind":"text"},{"key":"ubo","label":"UBOs","kind":"role"},{"key":"{role}.N.full_name","label":"Full name","kind":"text"}],
             "fields":[{"id":"f1","kind":"text","page":1,"name":"Text 1","near":"left: Full legal name of the entity","section":"1. ENTITY DETAILS"}]}"#).unwrap();
-        println!("{}", super::preview(&req, r#"{"entities":[]}"#).0);
+        println!("{}", super::preview(&req, r#"{"entities":[]}"#).unwrap().0);
     }
 }
