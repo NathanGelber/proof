@@ -578,8 +578,28 @@ async function drawLinks(p, v) {
     return a;
   }));
 }
+/** A link in a document can point anywhere, so show where it goes before opening it. */
+function confirmLink(url) {
+  let host_ = ''; try { host_ = /^mailto:/i.test(url) ? url.slice(7).split('?')[0] : new URL(url).host; } catch {}
+  const plain = /^http:\/\//i.test(url);
+  return new Promise(resolve => {
+    const m = modal(/^mailto:/i.test(url) ? 'Write an email?' : 'Open this link?',
+      h('p', {}, /^mailto:/i.test(url) ? 'This link starts an email to ' : 'This link opens ', h('b', {}, host_ || 'an unknown address'), /^mailto:/i.test(url) ? '.' : ' in your browser.'),
+      h('p', { class: 'linkurl' }, url.length > 300 ? url.slice(0, 300) + '…' : url),
+      plain ? h('p', { class: 'linkwarn' }, 'It isn’t a secure (https) address.') : null,
+      h('div', { class: 'actions' },
+        h('button', { class: 'btn quiet', onclick: () => { m.close(); resolve(false); } }, 'Cancel'),
+        h('button', { class: 'btn primary', onclick: () => { m.close(); resolve(true); } }, 'Open')));
+    m.scrim.addEventListener('cancel', () => resolve(false));
+  });
+}
 async function followLink(d, l) {
-  if (l.url) { if (!(await host.openUrl(l.url).catch(() => false))) toast('Only web and email links open from Proof.'); return; }
+  if (l.url) {
+    if (!/^(https?:\/\/|mailto:)/i.test(l.url)) { toast('Only web and email links open from Proof.'); return; }
+    if (!(await confirmLink(l.url))) return;
+    if (!(await host.openUrl(l.url).catch(() => false))) toast('Only web and email links open from Proof.');
+    return;
+  }
   try {
     const dest = typeof l.dest === 'string' ? await d.pdf.getDestination(l.dest) : l.dest; const ref = dest?.[0];
     const idx = ref && typeof ref === 'object' ? await d.pdf.getPageIndex(ref) : Number.isInteger(ref) ? ref : -1;
@@ -1128,8 +1148,7 @@ async function saveAnswers() {
 async function loadAnswers() {
   let entry;
   if (host.isDesktop) {
-    const { open } = await import('@tauri-apps/plugin-dialog');
-    const path = await open({ multiple: false, filters: [{ name: 'Form answers', extensions: ['json'] }] }); if (!path) return;
+    const [path] = await host.pickPaths({ filters: [{ name: 'Form answers', extensions: ['json'] }] }); if (!path) return;
     entry = { name: host.baseName(path), bytes: await host.readPath(path) };
   } else {
     entry = await new Promise(resolve => { const inp = Object.assign(document.createElement('input'), { type: 'file', accept: '.json,application/json' }); inp.onchange = async () => { const f = inp.files[0]; resolve(f ? { name: f.name, bytes: new Uint8Array(await f.arrayBuffer()) } : null); }; inp.click(); });

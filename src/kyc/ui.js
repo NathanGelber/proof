@@ -111,8 +111,7 @@ function setupDialog(info) {
       msg, h('div', { class: 'actions' }, h('button', { class: 'btn quiet', onclick: () => { m.close(); resolve(false); } }, 'Cancel'), go));
     m.scrim.addEventListener('cancel', () => resolve(false));
     async function openExisting() {
-      const { open } = await import('@tauri-apps/plugin-dialog');
-      const p = await open({ multiple: false, filters: [{ name: 'Proof profile', extensions: ['vault'] }] }); if (!p) return;
+      const [p] = await host.pickPaths({ filters: [{ name: 'Proof profile', extensions: ['vault'] }] }); if (!p) return;
       try { await V.use(p); m.close(); resolve(await unlockDialog(await refreshInfo())); } catch (e) { msg.textContent = errMsg(e); }
     }
     async function ok() {
@@ -258,8 +257,7 @@ function setupCard() {
       host.isDesktop ? h('div', { class: 'btns' },
         h('button', { class: 'btn quiet', onclick: async () => { const p = await host.pickSave(K.info?.path, { name: 'Proof profile', ext: 'vault' }); if (p) { path = p; where.textContent = p; } } }, 'Choose location…'),
         h('button', { class: 'btn quiet', onclick: async () => {
-          const { open } = await import('@tauri-apps/plugin-dialog');
-          const p = await open({ multiple: false, filters: [{ name: 'Proof profile', extensions: ['vault'] }] }); if (!p) return;
+          const [p] = await host.pickPaths({ filters: [{ name: 'Proof profile', extensions: ['vault'] }] }); if (!p) return;
           try { await V.use(p); await refreshInfo(); renderKyc(); } catch (e) { msg.textContent = errMsg(e); }
         } }, 'Use an existing profile…')) : null),
     msg, h('div', { class: 'btns' }, go));
@@ -631,8 +629,7 @@ function settingsView() {
       h('div', { class: 'btns' },
         h('button', { class: 'btn', onclick: async () => { const d = await host.pickFolder('Choose a folder for the backup'); if (!d || d.startsWith('download:')) return; try { const n = await V.backup(d); C.toast(`Backed up the profile and ${n} document${n === '1' ? '' : 's'}, still encrypted.`); } catch (e) { C.toast(errMsg(e), 7000); } } }, 'Back up…'),
         host.isDesktop ? h('button', { class: 'btn', onclick: async () => {
-          const { open } = await import('@tauri-apps/plugin-dialog');
-          const p = await open({ multiple: false, filters: [{ name: 'Proof profile', extensions: ['vault'] }] }); if (!p) return;
+          const [p] = await host.pickPaths({ filters: [{ name: 'Proof profile', extensions: ['vault'] }] }); if (!p) return;
           await flush().catch(() => {}); await V.use(p); afterLock();
         } }, 'Open a different profile…') : null)),
     h('div', { class: 'kblock2' }, h('h3', {}, 'Change passphrase'),

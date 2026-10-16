@@ -547,3 +547,6 @@ details.more > summary { font-family: var(--mono); font-size: 10.5px; text-trans
 .pk-i:not(.on) .pk-l { color: var(--mute); }
 .pk-i:not(.on) .pk-v { text-decoration: line-through; opacity: .6; }
 @media (max-width: 720px) { .pk-top { grid-template-columns: 1fr; } }
+
+.linkurl { font-family: var(--mono); font-size: 12px; word-break: break-all; color: var(--mute); max-height: 6em; overflow: auto; }
+.linkwarn { color: var(--err); font-size: 13px; }

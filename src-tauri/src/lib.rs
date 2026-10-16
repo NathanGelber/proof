@@ -1,3 +1,4 @@
+mod grants;
 mod matcher;
 mod scrub;
 mod vault;
@@ -5,8 +6,12 @@ mod vault;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::ipc::{InvokeBody, Request, Response};
+use grants::Grants;
 use tauri::{Emitter, Manager};
 use vault::Vault;
+
+/// Files opened or saved recently, newest first. Every entry was granted when it was added.
+struct Recent(Mutex<Vec<String>>);
 
 /// The KYC profile. Held behind a lock; only the commands below touch it.
 struct VaultState(Mutex<Vault>);
@@ -46,7 +51,7 @@ fn launch_files(state: tauri::State<LaunchFiles>) -> Vec<String> {
 }
 
 /// File types the page may read and write. Anything else (programs, scripts, shortcuts, system
-/// files) is refused, so a compromised page can't drop or read arbitrary files.
+/// files) is refused. On top of this, a path must have been granted (see grants.rs).
 const READ_EXT: &[&str] = &["pdf", "png", "jpg", "jpeg", "docx", "xlsx", "docm", "xlsm", "json"];
 const WRITE_EXT: &[&str] = &["pdf", "png", "json", "docx", "xlsx", "docm", "xlsm"];
 
@@ -75,8 +80,11 @@ fn checked_path(path: &str, allowed: &[&str]) -> Result<PathBuf, String> {
 }
 
 #[tauri::command]
-fn read_file(path: String) -> Result<Response, String> {
+fn read_file(grants: tauri::State<Grants>, path: String) -> Result<Response, String> {
     let p = checked_path(&path, READ_EXT)?;
+    if !grants.may_read(&p) {
+        return Err(format!("Proof won't open {path}: it wasn't chosen in Proof. Open it with Open or by dropping it on the window."));
+    }
     let meta = std::fs::metadata(&p).map_err(|e| format!("Couldn't read {path}: {e}"))?;
     if meta.len() > 300 * 1024 * 1024 {
         return Err(format!("{path} is larger than 300 MB."));
@@ -90,7 +98,7 @@ fn read_file(path: String) -> Result<Response, String> {
 /// Writes to a temporary file first, then replaces the target, so a failed save never
 /// leaves a half-written file behind.
 #[tauri::command]
-fn write_file(request: Request) -> Result<(), String> {
+fn write_file(grants: tauri::State<Grants>, request: Request) -> Result<(), String> {
     let raw = request
         .headers()
         .get("x-path")
@@ -98,7 +106,10 @@ fn write_file(request: Request) -> Result<(), String> {
         .to_str()
         .map_err(|e| e.to_string())?;
     let path = percent_decode(raw);
-    checked_path(&path, WRITE_EXT)?;
+    let p = checked_path(&path, WRITE_EXT)?;
+    if !grants.may_write(&p) {
+        return Err(format!("Proof won't save to {path}: that location wasn't chosen in Proof."));
+    }
     let InvokeBody::Raw(bytes) = request.body() else {
         return Err("Expected file contents".into());
     };
@@ -111,6 +122,91 @@ fn write_file(request: Request) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------- file dialogs
+// The dialogs run here rather than in the page, so the paths they return can be granted.
+
+#[derive(serde::Deserialize)]
+struct Filter {
+    name: String,
+    extensions: Vec<String>,
+}
+
+fn file_dialog(app: &tauri::AppHandle, title: Option<String>, filters: &[Filter]) -> tauri_plugin_dialog::FileDialogBuilder<tauri::Wry> {
+    use tauri_plugin_dialog::DialogExt;
+    let mut d = app.dialog().file();
+    if let Some(w) = app.get_webview_window("main") {
+        d = d.set_parent(&w);
+    }
+    if let Some(t) = title {
+        d = d.set_title(t);
+    }
+    for f in filters {
+        let ex: Vec<&str> = f.extensions.iter().map(|s| s.as_str()).collect();
+        d = d.add_filter(&f.name, &ex);
+    }
+    d
+}
+
+#[tauri::command]
+async fn pick_open(app: tauri::AppHandle, title: Option<String>, filters: Vec<Filter>, multiple: bool) -> Vec<String> {
+    let d = file_dialog(&app, title, &filters);
+    let paths: Vec<PathBuf> = if multiple {
+        d.blocking_pick_files().unwrap_or_default().into_iter().filter_map(|f| f.into_path().ok()).collect()
+    } else {
+        d.blocking_pick_file().and_then(|f| f.into_path().ok()).into_iter().collect()
+    };
+    let g = app.state::<Grants>();
+    paths.iter().for_each(|p| g.file(p));
+    paths.into_iter().map(|p| p.to_string_lossy().into_owned()).collect()
+}
+
+#[tauri::command]
+async fn pick_save(app: tauri::AppHandle, default_path: Option<String>, name: String, ext: String) -> Option<String> {
+    let mut d = file_dialog(&app, None, &[Filter { name, extensions: vec![ext] }]);
+    if let Some(def) = default_path {
+        let def = PathBuf::from(def);
+        if let Some(n) = def.file_name() {
+            d = d.set_file_name(n.to_string_lossy());
+        }
+        if let Some(dir) = def.parent().filter(|p| p.is_absolute()) {
+            d = d.set_directory(dir);
+        }
+    }
+    let p = d.blocking_save_file()?.into_path().ok()?;
+    app.state::<Grants>().file(&p);
+    Some(p.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+async fn pick_folder(app: tauri::AppHandle, title: Option<String>) -> Option<String> {
+    let p = file_dialog(&app, title, &[]).blocking_pick_folder()?.into_path().ok()?;
+    app.state::<Grants>().dir(&p);
+    Some(p.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn recent_list(recent: tauri::State<Recent>) -> Vec<String> {
+    recent.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// Only paths the person chose can go on the list, so the list can't be used to grant paths.
+#[tauri::command]
+fn recent_add(app: tauri::AppHandle, recent: tauri::State<Recent>, grants: tauri::State<Grants>, path: String) {
+    if checked_path(&path, READ_EXT).is_err() || !grants.has_file(std::path::Path::new(&path)) {
+        return;
+    }
+    let mut l = recent.0.lock().unwrap_or_else(|e| e.into_inner());
+    grants::recent_push(&mut l, &path);
+    grants::recent_store(&app, &l);
+}
+
+#[tauri::command]
+fn recent_forget(app: tauri::AppHandle, recent: tauri::State<Recent>, path: String) {
+    let mut l = recent.0.lock().unwrap_or_else(|e| e.into_inner());
+    l.retain(|p| p != &path);
+    grants::recent_store(&app, &l);
 }
 
 /// A Unicode TrueType font for text Proof adds to pages. Empty when none is found.
@@ -180,9 +276,13 @@ fn vault_info(state: tauri::State<VaultState>) -> VaultInfo {
 
 #[tauri::command]
 async fn vault_create(app: tauri::AppHandle, state: tauri::State<'_, VaultState>, passphrase: String, initial: String, path: Option<String>) -> Result<(), String> {
+    let chosen = path.is_some();
     let target = path.map(PathBuf::from).unwrap_or_else(|| configured_vault(&app));
     if target.extension().map(|e| e != "vault").unwrap_or(true) {
         return Err("A profile file has to end in .vault.".into());
+    }
+    if chosen && !app.state::<Grants>().may_write(&target) {
+        return Err("Choose where to keep the profile with Choose location.".into());
     }
     let mut fresh = Vault::new(target.clone());
     let fresh = tauri::async_runtime::spawn_blocking(move || fresh.create(&passphrase, &initial).map(|_| fresh))
@@ -210,6 +310,9 @@ fn vault_use(app: tauri::AppHandle, state: tauri::State<VaultState>, path: Strin
     let p = PathBuf::from(&path);
     if p.extension().map(|e| e != "vault").unwrap_or(true) {
         return Err("That isn't a Proof profile (.vault) file.".into());
+    }
+    if !app.state::<Grants>().has_file(&p) {
+        return Err("Choose the profile file in the Open dialog.".into());
     }
     if !p.is_file() {
         return Err(format!("{path} doesn't exist."));
@@ -261,7 +364,10 @@ fn vault_doc_delete(state: tauri::State<VaultState>, id: String) -> Result<(), S
 }
 
 #[tauri::command]
-fn vault_backup(state: tauri::State<VaultState>, dest: String) -> Result<String, String> {
+fn vault_backup(state: tauri::State<VaultState>, grants: tauri::State<Grants>, dest: String) -> Result<String, String> {
+    if !grants.has_dir(std::path::Path::new(&dest)) {
+        return Err("Choose the backup folder in the folder dialog.".into());
+    }
     state.0.lock().unwrap().backup(std::path::Path::new(&dest))
 }
 
@@ -297,13 +403,18 @@ fn match_preview(state: tauri::State<VaultState>, request: matcher::MatchRequest
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let launch = pdf_args(&std::env::args().collect::<Vec<_>>());
+    let grants = Grants::default();
+    launch.iter().for_each(|p| grants.file(std::path::Path::new(p)));
     tauri::Builder::default()
+        .manage(grants)
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.unminimize();
                 let _ = w.set_focus();
             }
             let files = pdf_args(&argv);
+            let g = app.state::<Grants>();
+            files.iter().for_each(|p| g.file(std::path::Path::new(p)));
             if !files.is_empty() {
                 let _ = app.emit("open-files", files);
             }
@@ -311,7 +422,28 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(LaunchFiles(Mutex::new(launch)))
+        // Files dropped on the window are granted here, then handed to the page.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+                let g = window.state::<Grants>();
+                let ok: Vec<String> = paths
+                    .iter()
+                    .filter(|p| checked_path(&p.to_string_lossy(), READ_EXT).is_ok())
+                    .map(|p| {
+                        g.file(p);
+                        p.to_string_lossy().into_owned()
+                    })
+                    .collect();
+                if !ok.is_empty() {
+                    let _ = window.emit("dropped-files", ok);
+                }
+            }
+        })
         .setup(|app| {
+            let recent = grants::recent_load(app.handle());
+            let g = app.state::<Grants>();
+            recent.iter().for_each(|p| g.file(std::path::Path::new(p)));
+            app.manage(Recent(Mutex::new(recent)));
             let path = configured_vault(app.handle());
             app.manage(VaultState(Mutex::new(Vault::new(path))));
             // Lock after 15 minutes without use even if the window is hung or hidden, and tell the page.
@@ -334,6 +466,12 @@ pub fn run() {
             launch_files,
             read_file,
             write_file,
+            pick_open,
+            pick_save,
+            pick_folder,
+            recent_list,
+            recent_add,
+            recent_forget,
             system_font,
             vault_info,
             vault_create,

@@ -4,11 +4,10 @@
 
 export const isDesktop = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
-let core, dialog, winApi, webviewApi, eventApi;
+let core, winApi, webviewApi, eventApi;
 if (isDesktop) {
-  [core, dialog, winApi, webviewApi, eventApi] = await Promise.all([
+  [core, winApi, webviewApi, eventApi] = await Promise.all([
     import('@tauri-apps/api/core'),
-    import('@tauri-apps/plugin-dialog'),
     import('@tauri-apps/api/window'),
     import('@tauri-apps/api/webview'),
     import('@tauri-apps/api/event'),
@@ -22,6 +21,15 @@ export const dirName = p => { const i = Math.max(p.lastIndexOf('\\'), p.lastInde
 export const joinPath = (dir, name) => dir + (dir.includes('\\') ? '\\' : '/') + name;
 export const mimeOf = name => /\.png$/i.test(name) ? 'image/png' : /\.jpe?g$/i.test(name) ? 'image/jpeg' : /\.(docx|docm)$/i.test(name) ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' : /\.(xlsx|xlsm)$/i.test(name) ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'application/pdf';
 
+/**
+ * File dialogs run in the app itself, which then lets Proof use only the paths they return
+ * (and files opened from Explorer, dropped on the window, or on the recent list).
+ * Resolves an array of paths; empty when cancelled.
+ */
+export async function pickPaths({ multiple = false, title = null, filters = [] } = {}) {
+  return core.invoke('pick_open', { title, filters, multiple });
+}
+
 export async function readPath(path) {
   const buf = await core.invoke('read_file', { path });
   return new Uint8Array(buf);
@@ -30,9 +38,7 @@ export async function readPath(path) {
 /** Let the person choose files to open. Resolves [{name, path, type, bytes}] (empty when cancelled). */
 export async function pickOpen({ multiple = true, title, office = false } = {}) {
   if (isDesktop) {
-    let res = await dialog.open({ multiple, title, filters: openFilters(office) });
-    if (!res) return [];
-    const paths = Array.isArray(res) ? res : [res];
+    const paths = await pickPaths({ multiple, title: title || null, filters: openFilters(office) });
     return Promise.all(paths.map(async path => ({ name: baseName(path), path, type: mimeOf(path), bytes: await readPath(path) })));
   }
   return new Promise(resolve => {
@@ -46,7 +52,7 @@ async function fileEntry(f) { return { name: f.name, path: null, type: f.type ||
 
 export async function pickImage() {
   if (isDesktop) {
-    const path = await dialog.open({ multiple: false, filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg'] }] });
+    const [path] = await pickPaths({ filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg'] }] });
     if (!path) return null;
     return { name: baseName(path), type: mimeOf(path), bytes: await readPath(path) };
   }
@@ -61,11 +67,11 @@ export async function pickImage() {
 
 /** Ask where to save. Resolves a path, or null when cancelled. In the browser, a pseudo path. */
 export async function pickSave(defaultPath, { name = 'PDF document', ext = 'pdf' } = {}) {
-  if (isDesktop) return (await dialog.save({ defaultPath, filters: [{ name, extensions: [ext] }] })) || null;
+  if (isDesktop) return (await core.invoke('pick_save', { defaultPath: defaultPath || null, name, ext })) || null;
   return 'download:' + baseName(defaultPath || 'document.' + ext);
 }
 export async function pickFolder(title) {
-  if (isDesktop) return (await dialog.open({ directory: true, title })) || null;
+  if (isDesktop) return (await core.invoke('pick_folder', { title: title || null })) || null;
   return 'download:';
 }
 
@@ -100,12 +106,12 @@ export function onDrop(cb, hover) {
     webviewApi.getCurrentWebview().onDragDropEvent(async e => {
       const t = e.payload.type;
       if (t === 'enter' || t === 'over') hover(true);
-      else if (t === 'leave') hover(false);
-      else if (t === 'drop') {
-        hover(false);
-        const paths = (e.payload.paths || []).filter(p => /\.(pdf|png|jpe?g|docx|xlsx|docm|xlsm)$/i.test(p));
-        if (paths.length) cb(await Promise.all(paths.map(async path => ({ name: baseName(path), path, type: mimeOf(path), bytes: await readPath(path) }))));
-      }
+      else if (t === 'leave' || t === 'drop') hover(false);
+    });
+    // The app hands over dropped files itself, after allowing Proof to read them.
+    eventApi.listen('dropped-files', async e => {
+      const paths = (e.payload || []).filter(p => /\.(pdf|png|jpe?g|docx|xlsx|docm|xlsm)$/i.test(p));
+      if (paths.length) cb(await Promise.all(paths.map(async path => ({ name: baseName(path), path, type: mimeOf(path), bytes: await readPath(path) }))));
     });
     return;
   }
@@ -129,13 +135,18 @@ export function onCloseRequested(handler) {
 }
 export async function closeWindow() { if (isDesktop) await winApi.getCurrentWindow().destroy(); }
 
-const RECENT = 'proof.recent';
-export function recentFiles() { try { return JSON.parse(localStorage.getItem(RECENT) || '[]'); } catch { return []; } }
+// The recent list is kept by the app, which only adds files the person chose.
+let recent = isDesktop ? await core.invoke('recent_list').catch(() => []) : [];
+try { localStorage.removeItem('proof.recent'); } catch {} // the old copy in window storage
+export function recentFiles() { return recent; }
 export function addRecent(path) {
-  if (!path) return;
-  try { const list = recentFiles().filter(p => p !== path); list.unshift(path); localStorage.setItem(RECENT, JSON.stringify(list.slice(0, 8))); } catch {}
+  if (!path || !isDesktop) return;
+  core.invoke('recent_add', { path }).then(() => core.invoke('recent_list')).then(l => (recent = l)).catch(() => {});
 }
-export function forgetRecent(path) { try { localStorage.setItem(RECENT, JSON.stringify(recentFiles().filter(p => p !== path))); } catch {} }
+export function forgetRecent(path) {
+  recent = recent.filter(p => p !== path);
+  if (isDesktop) core.invoke('recent_forget', { path }).catch(() => {});
+}
 
 /** Open a web or mail link from a document in the default browser or mail app. Other schemes are refused. */
 export async function openUrl(url) {
