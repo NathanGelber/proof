@@ -1,5 +1,6 @@
 mod grants;
 mod matcher;
+mod placement;
 mod scrub;
 mod vault;
 
@@ -414,8 +415,7 @@ pub fn run() {
         .manage(grants)
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             if let Some(w) = app.get_webview_window("main") {
-                let _ = w.unminimize();
-                let _ = w.set_focus();
+                placement::bring_back(&w);
             }
             let files = pdf_args(&argv);
             let g = app.state::<Grants>();
@@ -427,8 +427,31 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(LaunchFiles(Mutex::new(launch)))
+        .manage(placement::WindowMemory::default())
         // Files dropped on the window are granted here, then handed to the page.
         .on_window_event(|window, event| {
+            match event {
+                // Size and position are remembered for next time and kept on screen.
+                tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => {
+                    if let Some(w) = window.app_handle().get_webview_window(window.label()) {
+                        placement::remember(&w);
+                    }
+                }
+                // Moved to a screen with different scaling, or the scaling or resolution changed: once Windows
+                // has resized the window for it, shrink it if it no longer fits.
+                tauri::WindowEvent::ScaleFactorChanged { .. } => {
+                    let app = window.app_handle().clone();
+                    let label = window.label().to_string();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(250));
+                        if let Some(w) = app.get_webview_window(&label) {
+                            placement::keep_inside(&w);
+                        }
+                    });
+                }
+                tauri::WindowEvent::Destroyed => placement::save(window.app_handle()),
+                _ => {}
+            }
             if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
                 let g = window.state::<Grants>();
                 let ok: Vec<String> = paths
@@ -451,6 +474,7 @@ pub fn run() {
             app.manage(Recent(Mutex::new(recent)));
             let path = configured_vault(app.handle());
             app.manage(VaultState(Mutex::new(Vault::new(path))));
+            placement::restore(app.handle());
             // Lock after 15 minutes without use even if the window is hung or hidden, and tell the page.
             let handle = app.handle().clone();
             std::thread::spawn(move || loop {

@@ -16,10 +16,8 @@
         "title": "Proof",
         "width": 1360,
         "height": 880,
-        "minWidth": 940,
-        "minHeight": 580,
-        "center": true,
-        "dragDropEnabled": true
+        "dragDropEnabled": true,
+        "visible": false
       }
     ],
     "security": {

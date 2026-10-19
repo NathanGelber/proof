@@ -480,6 +480,17 @@ $('#zLbl').onclick = e => {
 };
 view.addEventListener('wheel', e => { if (!e.ctrlKey) return; e.preventDefault(); zoomStep(e.deltaY < 0 ? 1 : -1); }, { passive: false });
 let rzT; new ResizeObserver(() => { clearTimeout(rzT); rzT = setTimeout(() => { if (S.zoom === 'fit' || S.zoom === 'page') layoutView(); }, 120); }).observe(view);
+// Pages and thumbnails are drawn for the screen's pixel density. Moving to another screen or changing resolution
+// or scaling changes it, often without changing the view's size, so the observer above doesn't see it: redraw here.
+// The query matches only the current density, so it's re-armed after each change.
+(function watchDensity() {
+  matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`).addEventListener('change', () => {
+    watchDensity();
+    if (!S.pages.length) return;
+    layoutView();
+    for (const p of S.pages) { const t = thumbs.get(p.uid); if (t) queueThumb(p, t._canvas); }
+  }, { once: true });
+})();
 
 // Pan the page view: hold Space and drag, or drag with the middle mouse button.
 let spaceHeld = false, pan = null, overView = false;
