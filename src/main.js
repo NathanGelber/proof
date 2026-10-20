@@ -1090,6 +1090,22 @@ $('#bExport').onclick = e => {
   ], e.currentTarget);
 };
 
+// New window, and the overflow menu: commands with no button of their own.
+$('#bNew').onclick = () => host.newWindow();
+if (!host.canOpenWindows) $('#gNew').hidden = true;
+$('#bMore').onclick = e => {
+  const r = e.currentTarget.getBoundingClientRect(), doc = S.pages.length > 0, pdf = mode === 'pdf';
+  showMenu(r.left, r.bottom + 2, [
+    host.canOpenWindows ? { label: 'New window', kbd: 'Ctrl+N', action: () => host.newWindow() } : null,
+    host.canOpenWindows ? '-' : null,
+    { label: 'Find…', kbd: 'Ctrl+F', disabled: !doc || !pdf, action: openFind },
+    { label: 'Go to page…', kbd: 'Ctrl+G', disabled: !doc || !pdf, action: editPage },
+    { label: 'Print…', kbd: 'Ctrl+P', disabled: !doc, action: printNow },
+    '-',
+    { label: 'Keyboard shortcuts', kbd: 'F1', action: showShortcuts },
+  ], e.currentTarget);
+};
+
 // ---------------------------------------------------------------- inspector
 $$('.itabs button').forEach(b => (b.onclick = () => { S.itab = b.dataset.i; renderTabs(); renderInsp(); }));
 function renderTabs() { $$('.itabs button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.i === S.itab))); }

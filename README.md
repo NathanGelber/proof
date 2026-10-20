@@ -9,7 +9,8 @@ A small Windows PDF workbench: combine, reorder, rotate, split and extract pages
 - **Reading:** select and copy text, Ctrl+F to find, Ctrl+G to go to a page, links in the PDF work (web and email links open in the default app; nothing else is opened).
 - **Print** (Ctrl+P, Export → Print, or right-click pages) prints what's on screen, edits included, at actual size, as 300 dpi images through the Windows print dialog.
 - **Signed PDFs:** saving rewrites the file and breaks a digital signature, so Proof says so first and offers to save a copy.
-- **Windows:** one document per window. Opening a PDF from Explorer while Proof is running uses the window you were in if it's empty, otherwise opens a new one; Ctrl+N opens an empty window. Dropping a file on a window with a document asks: insert its pages or open it in a new window. Windows remember their size and place and stay on screen. The KYC profile is shared: unlock it in one window and it's unlocked in all of them, and a window can't save over changes another window made.
+- **Windows:** one document per window. Opening a PDF from Explorer while Proof is running uses the window you were in if it's empty, otherwise opens a new one; New (Ctrl+N) opens an empty window. Dropping a file on a window with a document asks: insert its pages or open it in a new window. Windows remember their size and place and stay on screen. The KYC profile is shared: unlock it in one window and it's unlocked in all of them, and a window can't save over changes another window made.
+- **⋯** (right end of the toolbar) holds what has no button of its own: New window, Find, Go to page, Print, Keyboard shortcuts.
 - **F1** lists the keyboard shortcuts.
 
 ## KYC tab

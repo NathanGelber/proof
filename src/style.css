@@ -51,6 +51,9 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); outline: n
 .tools button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
 .tools kbd { font-family: var(--mono); font-size: 9.5px; font-weight: 500; opacity: .55; letter-spacing: 0; }
 .zoom { border-right: 0; border-left: 1px solid var(--hair); }
+/* The overflow menu sits at the right end. With the tools showing, their margin already pushes it there. */
+.tb .more { border-right: 0; border-left: 1px solid var(--hair); margin-left: auto; }
+#app:not(.nodoc):not(.m-kyc) .tb .more { margin-left: 0; }
 
 .main { display: grid; grid-template-columns: 188px minmax(0, 1fr) 300px; min-height: 0; }
 
@@ -498,10 +501,12 @@ details.more > summary { font-family: var(--mono); font-size: 10.5px; text-trans
 .kdel { margin-top: 28px; }
 
 /* Narrow windows: the toolbar sheds its shortcut hints, then padding */
-@media (max-width: 1340px) { .tools kbd { display: none; } }
-@media (max-width: 1180px) { .tbtn, .tools button { padding: 0 8px; letter-spacing: .03em; } .tbtn.icon { padding: 0 8px; } .tbtn.zl { min-width: 52px; } }
-@media (max-width: 1040px) { .tbtn, .tools button { padding: 0 6px; font-size: 11px; letter-spacing: .02em; } .tbtn.icon { padding: 0 6px; } }
-@media (max-width: 980px) { .tbtn, .tools button { padding: 0 5px; } .tbtn.icon { padding: 0 5px; } .tbtn.zl { min-width: 44px; } }
+@media (max-width: 1500px) { .tools kbd { display: none; } }
+@media (max-width: 1330px) { .tbtn, .tools button { padding: 0 8px; letter-spacing: .03em; } .tbtn.icon { padding: 0 8px; } .tbtn.zl { min-width: 52px; } }
+@media (max-width: 1150px) { .tbtn, .tools button { padding: 0 6px; font-size: 11px; letter-spacing: .02em; } .tbtn.icon { padding: 0 6px; } }
+@media (max-width: 1020px) { .tbtn, .tools button { padding: 0 5px; } .tbtn.icon { padding: 0 5px; } .tbtn.zl { min-width: 44px; } }
+@media (max-width: 980px) { .tbtn, .tools button { padding: 0 4px; letter-spacing: 0; } .tbtn.icon { padding: 0 4px; } .modes button { padding: 0 10px; } }
+@media (max-width: 900px) { .tbtn, .tools button { font-size: 10px; padding: 0 3px; } .modes button { padding: 0 7px; font-size: 15px; } }
 
 /* Print: only the prepared pages */
 #printroot { display: none; }
