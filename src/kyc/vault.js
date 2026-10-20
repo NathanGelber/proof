@@ -9,16 +9,17 @@ let core = null;
 if (isDesktop) core = await import('@tauri-apps/api/core');
 
 // ---------------------------------------------------------------- browser stand-in
-const mock = { exists: false, pass: null, data: null, docs: new Map(), unlocked: false, key: false };
+const mock = { exists: false, pass: null, data: null, docs: new Map(), unlocked: false, key: false, rev: 0 };
 const mockCall = async (cmd, a = {}) => {
   const locked = () => { if (!mock.unlocked) throw 'LOCKED: The profile is locked.'; };
   switch (cmd) {
     case 'vault_info': return { path: '(browser memory)', exists: mock.exists, unlocked: mock.unlocked, has_key: mock.key || !!window.__mockMatch };
-    case 'vault_create': mock.exists = true; mock.pass = a.passphrase; mock.data = a.initial; mock.unlocked = true; return;
-    case 'vault_unlock': if (a.passphrase !== mock.pass) throw 'WRONGPASS: That passphrase didn’t work.'; mock.unlocked = true; return mock.data;
+    case 'vault_create': mock.exists = true; mock.pass = a.passphrase; mock.data = a.initial; mock.unlocked = true; return ++mock.rev;
+    case 'vault_unlock': if (a.passphrase !== mock.pass) throw 'WRONGPASS: That passphrase didn’t work.'; mock.unlocked = true; return { data: mock.data, rev: ++mock.rev };
     case 'vault_lock': mock.unlocked = false; return;
-    case 'vault_get': locked(); return mock.data;
-    case 'vault_save': locked(); mock.data = a.data; return;
+    case 'vault_get': locked(); return { data: mock.data, rev: mock.rev };
+    case 'vault_touch': return;
+    case 'vault_save': locked(); if (!a.force && a.rev !== mock.rev) throw 'STALE: Another Proof window saved the profile since this one loaded it.'; mock.data = a.data; return ++mock.rev;
     case 'vault_passphrase': locked(); if (a.old !== mock.pass) throw 'WRONGPASS: The current passphrase is wrong.'; mock.pass = a.new; return;
     case 'vault_doc_get': locked(); return mock.docs.get(a.id).buffer;
     case 'vault_doc_delete': locked(); mock.docs.delete(a.id); return;
@@ -36,10 +37,16 @@ const errText = e => String(e?.message || e);
 // ---------------------------------------------------------------- vault calls
 export const V = {
   info: () => call('vault_info'),
-  async create(passphrase, profile, path) { await call('vault_create', { passphrase, initial: JSON.stringify(profile), path: path || null }); },
-  async unlock(passphrase) { return JSON.parse(await call('vault_unlock', { passphrase })); },
+  /** Resolves the profile's version number. */
+  create: (passphrase, profile, path) => call('vault_create', { passphrase, initial: JSON.stringify(profile), path: path || null }),
+  /** Resolves {data, rev}: the profile JSON and its version. */
+  unlock: passphrase => call('vault_unlock', { passphrase }),
+  /** The profile another window unlocked: {data, rev}. */
+  get: () => call('vault_get'),
+  touch: () => call('vault_touch'),
   lock: () => call('vault_lock'),
-  async save(profile, force = false) { await call('vault_save', { data: JSON.stringify(profile), force }); },
+  /** Saves if `rev` is still the latest version (else STALE), unless forced. Resolves the new version. */
+  save: (profile, force = false, rev) => call('vault_save', { data: JSON.stringify(profile), force, rev }),
   passphrase: (old, nw) => call('vault_passphrase', { old, new: nw }),
   async docPut(id, bytes) {
     if (!isDesktop) { mock.docs.set(id, bytes.slice()); return; }
@@ -57,12 +64,15 @@ export const errKind = e => (/^([A-Z]+):/.exec(errText(e)) || [])[1] || '';
 export const errMsg = e => errText(e).replace(/^[A-Z]+:\s*/, '');
 
 // ---------------------------------------------------------------- in-memory profile
-export const K = { P: null, info: null, listeners: new Set(), saveT: null, saving: null };
+// Each window keeps its own copy (K.P) and the version it is (K.rev); the backend refuses saves from an old version.
+export const K = { P: null, rev: 0, info: null, listeners: new Set(), saveT: null, saving: null };
 export const onChange = fn => K.listeners.add(fn);
 const emit = () => K.listeners.forEach(f => { try { f(); } catch (e) { console.error(e); } });
 
 export async function refreshInfo() { K.info = await V.info(); if (!K.info.unlocked && K.P) { K.P = null; emit(); } return K.info; }
-export async function unlockWith(pass) { K.P = upgrade(await V.unlock(pass)); K.info = await V.info(); migrateSignature(); pruneLog(); emit(); return K.P; }
+export async function unlockWith(pass) { const r = await V.unlock(pass); K.P = upgrade(JSON.parse(r.data)); K.rev = r.rev; K.dirty = false; K.info = await V.info(); migrateSignature(); pruneLog(); emit(); return K.P; }
+/** Take the profile as it is now in the backend: unlocked in another window, or saved there since. */
+export async function loadOpen() { const r = await V.get(); K.P = upgrade(JSON.parse(r.data)); K.rev = r.rev; K.dirty = false; K.info = await V.info(); emit(); return K.P; }
 
 // ---- the saved signature: kept in the encrypted profile, never in browser storage
 const OLD_SIG = 'proof.signature';
@@ -87,7 +97,7 @@ export function pruneLog() {
 export async function createWith(pass, entityName, path) {
   const { newEntity } = await import('./schema.js');
   const P = newProfile(); if (entityName) P.entities.push(newEntity(entityName));
-  await V.create(pass, P, path); K.P = P; K.info = await V.info(); emit(); return P;
+  K.rev = await V.create(pass, P, path); K.P = P; K.dirty = false; K.info = await V.info(); emit(); return P;
 }
 export async function lockNow() { clearTimeout(K.saveT); if (K.P && K.dirty) await flush().catch(() => {}); await V.lock(); K.P = null; K.info = await V.info(); emit(); }
 function upgrade(P) { const d = newProfile(); P.settings = { ...d.settings, ...(P.settings || {}) }; P.mappings ||= {}; P.log ||= []; P.entities ||= []; return P; }
@@ -96,9 +106,10 @@ function upgrade(P) { const d = newProfile(); P.settings = { ...d.settings, ...(
 export function persist() { K.dirty = true; clearTimeout(K.saveT); K.saveT = setTimeout(() => flush().catch(onSaveError), 500); emit(); }
 export async function flush(force = false) {
   clearTimeout(K.saveT); if (!K.P || !K.dirty) return;
-  K.dirty = false;
-  try { await V.save(K.P, force); }
+  K.dirty = false; K.saving = true;
+  try { K.rev = await V.save(K.P, force, K.rev); }
   catch (e) { K.dirty = true; throw e; }
+  finally { K.saving = false; }
 }
 let saveErrorHandler = e => console.error(e);
 export const setSaveErrorHandler = fn => (saveErrorHandler = fn);

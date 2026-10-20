@@ -4,11 +4,11 @@
 import * as host from '../host.js';
 import { GROUPS, ENTITY_KEYS, PERSON_KEYS, ROLES, SPECIAL_KEYS, DOC_TYPES, docTypeInfo, entityKeys, personKeys, keyDef, keyLabel, roleInfo, newEntity, ENUM_KINDS } from './schema.js';
 import { COUNTRIES } from './countries.js';
-import { K, V, refreshInfo, unlockWith, createWith, lockNow, pruneLog, persist, flush, setValue, computed, rawValue, peopleIn, todayIso, entityById, errKind, errMsg, setSaveErrorHandler, onChange } from './vault.js';
+import { K, V, refreshInfo, unlockWith, loadOpen, createWith, lockNow, pruneLog, persist, flush, setValue, computed, rawValue, peopleIn, todayIso, entityById, errKind, errMsg, setSaveErrorHandler, onChange } from './vault.js';
 import { pageLines, describeFields, flatLines, fingerprint, sha256 } from './extract.js';
 import { loadOffice, isOfficeName } from './office.js';
 import { localFields, claudeMatch, libLabel, libKey, isQuestionLine, lineLabel } from './match.js';
-import { initFill, endFill, fillKind, fillName, drawFill, fillNow } from './fill.js';
+import { initFill, endFill, rebindFill, fillKind, fillName, drawFill, fillNow } from './fill.js';
 import { harvestForm, initHarvest } from './harvest.js';
 import { dateInput } from './datefield.js';
 import { initPacket, createPacket } from './packet.js';
@@ -16,9 +16,14 @@ import { prepare, pdfjsLib } from '../engine.js';
 
 let C; // context from main.js
 const IDLE_MS = 15 * 60 * 1000;
-let lastUse = Date.now();
-const touch = () => (lastUse = Date.now());
-setInterval(() => { if (K.P && Date.now() - lastUse > IDLE_MS) lockNow().then(() => afterLock('Profile locked after 15 minutes without use.')); }, 30000);
+let lastUse = Date.now(), lastPing = 0;
+// In the app the backend locks after 15 minutes without use in any window, and tells every window (see initKyc);
+// use here counts for all windows. In a plain browser the page locks itself.
+const touch = () => {
+  lastUse = Date.now();
+  if (host.isDesktop && K.P && lastUse - lastPing > 30000) { lastPing = lastUse; V.touch().catch(() => {}); }
+};
+if (!host.isDesktop) setInterval(() => { if (K.P && Date.now() - lastUse > IDLE_MS) lockNow().then(() => afterLock('Profile locked after 15 minutes without use.')); }, 30000);
 /** After any lock: the decrypted profile leaves the page, open screens close, a running fill ends. */
 function afterLock(msg) { K.P = null; endFill(); view.sec = 'form'; refreshInfo().catch(() => {}).finally(() => { renderKyc(); C?.renderInsp(); }); if (msg) C?.toast(msg, 6000); }
 
@@ -37,17 +42,47 @@ export function initKyc(ctx) {
   setSaveErrorHandler(async e => {
     if (errKind(e) === 'LOCKED') { afterLock(); C.renderInsp(); C.toast('Profile locked. Last change not saved.', 7000); return; }
     if (errKind(e) === 'CONFLICT') return conflict();
+    if (errKind(e) === 'STALE') return stale();
     C.toast('Couldn’t save the profile: ' + errMsg(e), 8000);
   });
   onChange(() => { const st = document.querySelector('#kycnav .kstate'); if (st) st.textContent = K.dirty ? 'Saving…' : ''; });
   initFill(C); initHarvest(C); initPacket(C);
   C.hooks.layout = () => { if (layoutKyc() && C.mode() === 'kyc') { drawNav(); if (view.sec === 'form' && !fillKind()) drawPane(); } };
   C.hooks.show = () => renderKyc();
+  C.hooks.busy = () => !!fillKind();
   refreshInfo().catch(() => {}).finally(() => renderKyc());
   document.getElementById('kycpane')?.addEventListener('pointerdown', touch);
   document.getElementById('kycnav')?.addEventListener('pointerdown', touch);
-  host.onEvent('vault-locked', () => { if (K.P) afterLock('Profile locked after 15 minutes without use.'); });
+  // Another window (or the idle timer) locked the profile or switched to another one.
+  host.onEvent('vault-locked', e => {
+    if (!K.P || e?.by === host.windowLabel) return;
+    afterLock(e?.why === 'idle' ? 'Profile locked after 15 minutes without use.' : e?.why === 'switched' ? 'Another Proof window switched profiles. Unlock again here.' : 'Profile locked in another Proof window.');
+  });
+  // Another window unlocked or saved the profile: take its version, unless this window has an edit of its own
+  // waiting (that save then asks, see stale()).
+  host.onEvent('vault-changed', e => {
+    if (e?.by === host.windowLabel) return;
+    if (!K.P) { refreshInfo().then(() => renderKyc()).catch(() => {}); return; }
+    if (K.dirty || K.saving || e?.rev === K.rev) return;
+    reload();
+  });
   if (!host.isDesktop) import('./schema.js').then(schema => (window.__kyc = { K, V, setValue, flush, schema, rawValue }));
+}
+
+/** Take the profile as the backend has it now, keeping a running fill on the same entity. */
+async function reload() {
+  try { await loadOpen(); rebindFill(); renderKyc(); C.renderInsp(); }
+  catch { afterLock(); }
+}
+
+async function stale() {
+  const { h, modal } = C;
+  const m = modal('Profile changed in another window',
+    h('p', {}, 'Another Proof window saved the profile after this window last loaded it. Your last edit here isn’t saved yet.'),
+    h('p', { class: 'hint' }, 'Take the other window’s version (your unsaved edit is dropped), or keep yours (the other window’s changes are overwritten).'),
+    h('div', { class: 'actions' },
+      h('button', { class: 'btn', onclick: async () => { m.close(); K.dirty = false; await reload(); } }, 'Take theirs'),
+      h('button', { class: 'btn danger', onclick: async () => { m.close(); try { K.dirty = true; await flush(true); C.toast('Saved your version.'); } catch (e) { C.toast(errMsg(e), 7000); } } }, 'Keep mine')));
 }
 
 async function conflict() {
@@ -67,6 +102,7 @@ export async function ensureUnlocked() {
   if (K.P) { try { await V.info().then(i => { if (!i.unlocked) K.P = null; }); } catch {} }
   if (K.P) return true;
   const info = await refreshInfo();
+  if (info.unlocked) { try { await loadOpen(); rebindFill(); return true; } catch {} } // unlocked in another window
   return info.exists ? unlockDialog(info) : setupDialog(info);
 }
 
@@ -150,8 +186,13 @@ export function layoutKyc() {
   return app.className !== before;
 }
 
+let pickingUp = null;
 export function renderKyc() {
   if (!C || C.mode() !== 'kyc') { layoutKyc(); return; }
+  // Unlocked in another window: use it here too rather than asking for the passphrase again.
+  if (!K.P && K.info?.unlocked && !pickingUp) {
+    pickingUp = loadOpen().catch(() => refreshInfo()).finally(() => { pickingUp = null; if (K.P || !K.info?.unlocked) { renderKyc(); C.renderInsp(); } });
+  }
   const changed = layoutKyc();
   drawNav();
   if (view.sec === 'form' && K.P && fillKind()) drawFill(); else drawPane();

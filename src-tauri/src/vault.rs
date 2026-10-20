@@ -138,7 +138,7 @@ impl Vault {
         self.key.is_some()
     }
 
-    fn touch(&mut self) -> Result<(), String> {
+    pub fn touch(&mut self) -> Result<(), String> {
         if !self.check() {
             return Err("LOCKED: The profile is locked.".into());
         }

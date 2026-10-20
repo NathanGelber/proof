@@ -15,7 +15,7 @@ import * as host from '../host.js';
 import { ROLES, SPECIAL_KEYS, ENUM_KINDS, entityKeys, personKeys, keyDef, keyLabel, roleInfo } from './schema.js';
 import { COUNTRIES } from './countries.js';
 import { readDate } from './datefield.js';
-import { K, V, persist, setValue, rawValue, peopleIn, todayIso, refreshInfo, errKind, errMsg } from './vault.js';
+import { K, V, persist, setValue, rawValue, peopleIn, todayIso, refreshInfo, errKind, errMsg, entityById } from './vault.js';
 import { pageLines, describeFields, flatLines, fingerprint, sha256 } from './extract.js';
 import { loadOffice, isOfficeName } from './office.js';
 import { localFields, localLines, claudeMatch, claudeRequest, render, placeOnLine, yesNoOption, learn, libLabel, isQuestionLine, lineLabel, fieldLabel, autoAs, reversedQ } from './match.js';
@@ -36,6 +36,8 @@ export function initFill(ctx) {
 
 /** The profile locked: the session holds profile objects, so it ends. Answers already on pages stay. */
 export function endFill() { SES = null; }
+/** After the profile was reloaded, point a running fill at the reloaded entity. */
+export function rebindFill() { if (SES?.ent) SES.ent = entityById(SES.ent.id) || SES.ent; }
 
 /** What's being filled: 'pdf' (pages on screen, fields or flat), 'office', or null. */
 export function fillKind() {

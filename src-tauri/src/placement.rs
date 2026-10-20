@@ -1,11 +1,14 @@
-//! Where the main window goes and how big it is.
+//! Where Proof's windows go and how big they are.
 //!
-//! The window starts hidden (tauri.conf.json), is placed here, then shown, so it never flashes in the wrong spot.
-//! Last time's size and position are restored if that spot is still on a screen; otherwise it opens centred on
-//! the screen the mouse is on. Either way it is kept inside that screen's work area (the part the taskbar
-//! doesn't cover), and the minimum size shrinks for screens too small for it.
+//! Windows start hidden, are placed here, then shown, so they never flash in the wrong spot.
+//! The first window restores last time's size and position if that spot is still on a screen; otherwise it opens
+//! centred on the screen the mouse is on. Later windows open on the screen the mouse is on, stepped down from the
+//! window they came from when that's on the same screen. Every window is kept inside its screen's work area (the
+//! part the taskbar doesn't cover), and the minimum size shrinks for screens too small for it.
+//! The last window to close is the one remembered.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{AppHandle, LogicalSize, Manager, Monitor, PhysicalPosition, PhysicalSize, WebviewWindow};
@@ -26,9 +29,15 @@ pub struct Saved {
     maximized: bool,
 }
 
-/// Latest known state of the main window, written to disk when it closes.
+/// Latest known state of each open window, and which one was used last.
 #[derive(Default)]
-pub struct WindowMemory(Mutex<Option<Saved>>);
+pub struct WindowMemory(Mutex<Mem>);
+
+#[derive(Default)]
+struct Mem {
+    by_label: HashMap<String, Saved>,
+    focused: Option<String>,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Rect {
@@ -130,7 +139,42 @@ fn place_default(w: &WebviewWindow) {
     }
 }
 
-/// Places the hidden main window at startup and shows it.
+/// Inner size for a new window on `m`: the size of the window it came from (its normal size if maximized),
+/// else last time's, else the default. Kept in logical pixels across screens with different scaling.
+fn size_for(app: &AppHandle, from: Option<&WebviewWindow>, m: &Monitor) -> (u32, u32) {
+    let s = m.scale_factor();
+    let base = from.and_then(|f| app.state::<WindowMemory>().0.lock().unwrap().by_label.get(f.label()).copied()).or_else(|| load(app));
+    match base {
+        Some(b) => {
+            let k = s / b.scale;
+            ((b.w as f64 * k).round() as u32, (b.h as f64 * k).round() as u32)
+        }
+        None => ((DEFAULT.0 * s).round() as u32, (DEFAULT.1 * s).round() as u32),
+    }
+}
+
+/// Places a new hidden window and shows it. `from` is the window that was in use when it was asked for.
+pub fn place_new(w: &WebviewWindow, from: Option<&WebviewWindow>) {
+    if let Some(m) = screen_under_cursor(w) {
+        let a = work_area(&m);
+        let inner = size_for(w.app_handle(), from, &m);
+        // Stepped down from the window it came from, if that one is on this screen and not maximized; else centred.
+        let pos = from
+            .filter(|f| !f.is_maximized().unwrap_or(false) && !f.is_minimized().unwrap_or(false))
+            .and_then(|f| f.outer_position().ok())
+            .filter(|p| a.contains(p.x.saturating_add(40), p.y.saturating_add(10)))
+            .map(|p| {
+                let step = (32.0 * m.scale_factor()).round() as i32;
+                (p.x + step, p.y + step)
+            });
+        place_on(w, &m, inner, pos);
+    }
+    remember(w);
+    let _ = w.show();
+    let _ = w.set_focus();
+}
+
+/// Places the hidden first window at startup and shows it.
 pub fn restore(app: &AppHandle) {
     let Some(w) = app.get_webview_window("main") else { return };
     let saved = load(app);
@@ -157,7 +201,7 @@ pub fn restore(app: &AppHandle) {
     let _ = w.set_focus();
 }
 
-/// Brings the window back from wherever it is when Proof is launched again. If it's no longer on any screen
+/// Brings a window to the front, e.g. when it takes files opened from Explorer. If it's no longer on any screen
 /// (a monitor was unplugged or rearranged), it's moved to the screen the mouse is on.
 pub fn bring_back(w: &WebviewWindow) {
     let _ = w.unminimize();
@@ -191,26 +235,49 @@ pub fn keep_inside(w: &WebviewWindow) {
 /// Notes the window's current state. The normal rectangle is only updated while it's neither maximized nor
 /// minimized, so restoring from maximized goes back to a sensible size.
 pub fn remember(w: &WebviewWindow) {
-    let mem = w.state::<WindowMemory>();
-    let mut cur = mem.0.lock().unwrap();
     if w.is_minimized().unwrap_or(false) {
         return;
     }
     let maximized = w.is_maximized().unwrap_or(false);
-    if maximized {
-        if let Some(s) = cur.as_mut() {
-            s.maximized = true;
+    let now = if maximized { None } else { normal(w) };
+    let mem = w.state::<WindowMemory>();
+    let mut mem = mem.0.lock().unwrap();
+    match (now, mem.by_label.get_mut(w.label())) {
+        (Some(s), _) => {
+            mem.by_label.insert(w.label().to_string(), s);
         }
-        return;
-    }
-    if let (Ok(p), Ok(i), Ok(scale)) = (w.outer_position(), w.inner_size(), w.scale_factor()) {
-        *cur = Some(Saved { x: p.x, y: p.y, w: i.width, h: i.height, scale, maximized: false });
+        (None, Some(s)) => s.maximized = maximized,
+        (None, None) => {}
     }
 }
 
-/// Writes the last known state to disk.
-pub fn save(app: &AppHandle) {
-    if let Some(s) = *app.state::<WindowMemory>().0.lock().unwrap() {
+fn normal(w: &WebviewWindow) -> Option<Saved> {
+    let (p, i, scale) = (w.outer_position().ok()?, w.inner_size().ok()?, w.scale_factor().ok()?);
+    Some(Saved { x: p.x, y: p.y, w: i.width, h: i.height, scale, maximized: false })
+}
+
+/// Notes which window is in use, so files opened from Explorer go to it.
+pub fn set_focused(w: &tauri::Window) {
+    w.state::<WindowMemory>().0.lock().unwrap().focused = Some(w.label().to_string());
+}
+
+/// The window used last, or any open window.
+pub fn focused(app: &AppHandle) -> Option<WebviewWindow> {
+    let label = app.state::<WindowMemory>().0.lock().unwrap().focused.clone();
+    label.and_then(|l| app.get_webview_window(&l)).or_else(|| app.webview_windows().into_values().next())
+}
+
+/// A window closed: its state is written to disk, so the last one closed is what the next start restores.
+pub fn closed(app: &AppHandle, label: &str) {
+    let state = app.state::<WindowMemory>();
+    let s = {
+        let mut mem = state.0.lock().unwrap();
+        if mem.focused.as_deref() == Some(label) {
+            mem.focused = None;
+        }
+        mem.by_label.remove(label)
+    };
+    if let Some(s) = s {
         store(app, &s);
     }
 }

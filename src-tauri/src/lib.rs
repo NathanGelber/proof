@@ -4,7 +4,9 @@ mod placement;
 mod scrub;
 mod vault;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
 use tauri::ipc::{InvokeBody, Request, Response};
 use grants::Grants;
@@ -15,10 +17,12 @@ use vault::Vault;
 struct Recent(Mutex<Vec<String>>);
 
 /// The KYC profile. Held behind a lock; only the commands below touch it.
-struct VaultState(Mutex<Vault>);
+/// The number counts loads and saves, so a window can't save over a newer version saved from another window.
+struct VaultState(Mutex<Vault>, AtomicU64);
 
-/// PDF paths passed on the command line at launch (e.g. double-clicking a .pdf in Explorer).
-struct LaunchFiles(Mutex<Vec<String>>);
+/// Files each window opens when it starts, by window label: the command line for the first window
+/// (e.g. double-clicking a .pdf in Explorer), the files it was opened for for the others.
+struct LaunchFiles(Mutex<HashMap<String, Vec<String>>>);
 
 fn pdf_args(args: &[String]) -> Vec<String> {
     args.iter()
@@ -47,8 +51,52 @@ fn percent_decode(s: &str) -> String {
 }
 
 #[tauri::command]
-fn launch_files(state: tauri::State<LaunchFiles>) -> Vec<String> {
-    std::mem::take(&mut *state.0.lock().unwrap())
+fn launch_files(window: tauri::WebviewWindow, state: tauri::State<LaunchFiles>) -> Vec<String> {
+    state.0.lock().unwrap().remove(window.label()).unwrap_or_default()
+}
+
+// ---------------------------------------------------------------- windows
+// One Proof process, one window per document. Each window is its own page with its own document;
+// the profile, granted files and recent list are shared.
+
+static WINDOWS: AtomicU32 = AtomicU32::new(0);
+
+/// Opens a new window for `files` (already granted), or an empty one.
+fn open_window(app: &tauri::AppHandle, files: Vec<String>) {
+    let app = app.clone();
+    // Building a window on the thread that handles events or plain commands deadlocks WebView2 on Windows.
+    std::thread::spawn(move || {
+        let label = format!("w{}", WINDOWS.fetch_add(1, Ordering::Relaxed) + 1);
+        app.state::<LaunchFiles>().0.lock().unwrap().insert(label.clone(), files);
+        let from = placement::focused(&app);
+        let built = tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::default())
+            .title("Proof")
+            .inner_size(1360.0, 880.0)
+            .visible(false)
+            .build();
+        match built {
+            Ok(w) => placement::place_new(&w, from.as_ref()),
+            Err(_) => {
+                app.state::<LaunchFiles>().0.lock().unwrap().remove(&label);
+            }
+        }
+    });
+}
+
+/// A new window, empty or for files Proof may already read. Grants nothing new.
+#[tauri::command]
+fn new_window(app: tauri::AppHandle, grants: tauri::State<Grants>, paths: Vec<String>) {
+    let ok = paths
+        .into_iter()
+        .filter(|p| checked_path(p, READ_EXT).is_ok() && grants.has_file(std::path::Path::new(p)))
+        .collect();
+    open_window(&app, ok);
+}
+
+/// Brings the calling window to the front (and back onto a screen if it's lost).
+#[tauri::command]
+fn window_front(window: tauri::WebviewWindow) {
+    placement::bring_back(&window);
 }
 
 /// File types the page may read and write. Anything else (programs, scripts, shortcuts, system
@@ -139,12 +187,9 @@ struct Filter {
     extensions: Vec<String>,
 }
 
-fn file_dialog(app: &tauri::AppHandle, title: Option<String>, filters: &[Filter]) -> tauri_plugin_dialog::FileDialogBuilder<tauri::Wry> {
+fn file_dialog(window: &tauri::WebviewWindow, title: Option<String>, filters: &[Filter]) -> tauri_plugin_dialog::FileDialogBuilder<tauri::Wry> {
     use tauri_plugin_dialog::DialogExt;
-    let mut d = app.dialog().file();
-    if let Some(w) = app.get_webview_window("main") {
-        d = d.set_parent(&w);
-    }
+    let mut d = window.dialog().file().set_parent(window);
     if let Some(t) = title {
         d = d.set_title(t);
     }
@@ -156,8 +201,8 @@ fn file_dialog(app: &tauri::AppHandle, title: Option<String>, filters: &[Filter]
 }
 
 #[tauri::command]
-async fn pick_open(app: tauri::AppHandle, title: Option<String>, filters: Vec<Filter>, multiple: bool) -> Vec<String> {
-    let d = file_dialog(&app, title, &filters);
+async fn pick_open(app: tauri::AppHandle, window: tauri::WebviewWindow, title: Option<String>, filters: Vec<Filter>, multiple: bool) -> Vec<String> {
+    let d = file_dialog(&window, title, &filters);
     let paths: Vec<PathBuf> = if multiple {
         d.blocking_pick_files().unwrap_or_default().into_iter().filter_map(|f| f.into_path().ok()).collect()
     } else {
@@ -169,8 +214,8 @@ async fn pick_open(app: tauri::AppHandle, title: Option<String>, filters: Vec<Fi
 }
 
 #[tauri::command]
-async fn pick_save(app: tauri::AppHandle, default_path: Option<String>, name: String, ext: String) -> Option<String> {
-    let mut d = file_dialog(&app, None, &[Filter { name, extensions: vec![ext] }]);
+async fn pick_save(app: tauri::AppHandle, window: tauri::WebviewWindow, default_path: Option<String>, name: String, ext: String) -> Option<String> {
+    let mut d = file_dialog(&window, None, &[Filter { name, extensions: vec![ext] }]);
     if let Some(def) = default_path {
         let def = PathBuf::from(def);
         if let Some(n) = def.file_name() {
@@ -186,8 +231,8 @@ async fn pick_save(app: tauri::AppHandle, default_path: Option<String>, name: St
 }
 
 #[tauri::command]
-async fn pick_folder(app: tauri::AppHandle, title: Option<String>) -> Option<String> {
-    let p = file_dialog(&app, title, &[]).blocking_pick_folder()?.into_path().ok()?;
+async fn pick_folder(app: tauri::AppHandle, window: tauri::WebviewWindow, title: Option<String>) -> Option<String> {
+    let p = file_dialog(&window, title, &[]).blocking_pick_folder()?.into_path().ok()?;
     app.state::<Grants>().dir(&p);
     Some(p.to_string_lossy().into_owned())
 }
@@ -265,6 +310,26 @@ fn remember_vault(app: &tauri::AppHandle, p: &std::path::Path) -> Result<(), Str
     std::fs::write(f, serde_json::json!({ "path": p }).to_string()).map_err(|e| e.to_string())
 }
 
+/// The decrypted profile and the version it is.
+#[derive(serde::Serialize)]
+struct VaultData {
+    data: String,
+    rev: u64,
+}
+
+/// Every window drops its copy of the profile (except `by`, which did this itself).
+/// `why`: "idle" (15 minutes without use), "locked", or "switched" (another profile file).
+fn tell_locked(app: &tauri::AppHandle, why: &str, by: &str) {
+    let _ = app.emit("vault-locked", serde_json::json!({ "why": why, "by": by }));
+}
+/// Other windows pick up the new version unless they have edits of their own.
+fn tell_changed(app: &tauri::AppHandle, rev: u64, by: &str) {
+    let _ = app.emit("vault-changed", serde_json::json!({ "rev": rev, "by": by }));
+}
+fn bump(state: &VaultState) -> u64 {
+    state.1.fetch_add(1, Ordering::SeqCst) + 1
+}
+
 #[derive(serde::Serialize)]
 struct VaultInfo {
     path: String,
@@ -281,7 +346,7 @@ fn vault_info(state: tauri::State<VaultState>) -> VaultInfo {
 }
 
 #[tauri::command]
-async fn vault_create(app: tauri::AppHandle, state: tauri::State<'_, VaultState>, passphrase: String, initial: String, path: Option<String>) -> Result<(), String> {
+async fn vault_create(app: tauri::AppHandle, window: tauri::WebviewWindow, state: tauri::State<'_, VaultState>, passphrase: String, initial: String, path: Option<String>) -> Result<u64, String> {
     let chosen = path.is_some();
     let target = path.map(PathBuf::from).unwrap_or_else(|| configured_vault(&app));
     if target.extension().map(|e| e != "vault").unwrap_or(true) {
@@ -296,23 +361,29 @@ async fn vault_create(app: tauri::AppHandle, state: tauri::State<'_, VaultState>
         .map_err(|e| e.to_string())??;
     remember_vault(&app, &target)?;
     *state.0.lock().unwrap() = fresh;
-    Ok(())
+    tell_locked(&app, "switched", window.label());
+    Ok(bump(&state))
 }
 
 #[tauri::command]
-async fn vault_unlock(state: tauri::State<'_, VaultState>, passphrase: String) -> Result<String, String> {
+async fn vault_unlock(app: tauri::AppHandle, window: tauri::WebviewWindow, state: tauri::State<'_, VaultState>, passphrase: String) -> Result<VaultData, String> {
     let path = state.0.lock().unwrap().path.clone();
     let mut v = Vault::new(path);
     let (v, data) = tauri::async_runtime::spawn_blocking(move || v.unlock(&passphrase).map(|d| (v, d)))
         .await
         .map_err(|e| e.to_string())??;
-    *state.0.lock().unwrap() = v;
-    Ok(data)
+    let rev = {
+        let mut cur = state.0.lock().unwrap();
+        *cur = v;
+        bump(&state)
+    };
+    tell_changed(&app, rev, window.label());
+    Ok(VaultData { data, rev })
 }
 
 /// Point Proof at an existing profile file, e.g. one in a shared folder.
 #[tauri::command]
-fn vault_use(app: tauri::AppHandle, state: tauri::State<VaultState>, path: String) -> Result<(), String> {
+fn vault_use(app: tauri::AppHandle, window: tauri::WebviewWindow, state: tauri::State<VaultState>, path: String) -> Result<(), String> {
     let p = PathBuf::from(&path);
     if p.extension().map(|e| e != "vault").unwrap_or(true) {
         return Err("That isn't a Proof profile (.vault) file.".into());
@@ -325,22 +396,47 @@ fn vault_use(app: tauri::AppHandle, state: tauri::State<VaultState>, path: Strin
     }
     remember_vault(&app, &p)?;
     *state.0.lock().unwrap() = Vault::new(p);
+    tell_locked(&app, "switched", window.label());
     Ok(())
 }
 
 #[tauri::command]
-fn vault_lock(state: tauri::State<VaultState>) {
+fn vault_lock(app: tauri::AppHandle, window: tauri::WebviewWindow, state: tauri::State<VaultState>) {
     state.0.lock().unwrap().lock();
+    tell_locked(&app, "locked", window.label());
 }
 
+/// The unlocked profile, for a window that didn't unlock it itself.
 #[tauri::command]
-fn vault_get(state: tauri::State<VaultState>) -> Result<String, String> {
-    state.0.lock().unwrap().get()
+fn vault_get(state: tauri::State<VaultState>) -> Result<VaultData, String> {
+    let mut v = state.0.lock().unwrap();
+    let data = v.get()?;
+    Ok(VaultData { data, rev: state.1.load(Ordering::SeqCst) })
 }
 
+/// Activity in a window keeps the profile open for all of them.
 #[tauri::command]
-fn vault_save(state: tauri::State<VaultState>, data: String, force: Option<bool>) -> Result<(), String> {
-    state.0.lock().unwrap().save(&data, force.unwrap_or(false))
+fn vault_touch(state: tauri::State<VaultState>) {
+    let mut v = state.0.lock().unwrap();
+    if v.check() {
+        let _ = v.touch();
+    }
+}
+
+/// Saves the profile if `rev` is still the latest version (unless forced). Returns the new version.
+#[tauri::command]
+fn vault_save(app: tauri::AppHandle, window: tauri::WebviewWindow, state: tauri::State<VaultState>, data: String, force: Option<bool>, rev: Option<u64>) -> Result<u64, String> {
+    let force = force.unwrap_or(false);
+    let new = {
+        let mut v = state.0.lock().unwrap();
+        if !force && rev != Some(state.1.load(Ordering::SeqCst)) {
+            return Err("STALE: Another Proof window saved the profile since this one loaded it.".into());
+        }
+        v.save(&data, force)?;
+        bump(&state)
+    };
+    tell_changed(&app, new, window.label());
+    Ok(new)
 }
 
 #[tauri::command]
@@ -413,20 +509,22 @@ pub fn run() {
     launch.iter().for_each(|p| grants.file(std::path::Path::new(p)));
     tauri::Builder::default()
         .manage(grants)
+        // Launching Proof again goes to the running one. Files go to the window used last, which opens them itself
+        // if it has nothing open, or asks for a new window (main.js). Without files, a new empty window opens.
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
-            if let Some(w) = app.get_webview_window("main") {
-                placement::bring_back(&w);
-            }
             let files = pdf_args(&argv);
             let g = app.state::<Grants>();
             files.iter().for_each(|p| g.file(std::path::Path::new(p)));
-            if !files.is_empty() {
-                let _ = app.emit("open-files", files);
+            match placement::focused(app) {
+                Some(w) if !files.is_empty() => {
+                    let _ = app.emit_to(w.label(), "open-files", files);
+                }
+                _ => open_window(app, files),
             }
         }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .manage(LaunchFiles(Mutex::new(launch)))
+        .manage(LaunchFiles(Mutex::new(HashMap::from([("main".to_string(), launch)]))))
         .manage(placement::WindowMemory::default())
         // Files dropped on the window are granted here, then handed to the page.
         .on_window_event(|window, event| {
@@ -449,7 +547,8 @@ pub fn run() {
                         }
                     });
                 }
-                tauri::WindowEvent::Destroyed => placement::save(window.app_handle()),
+                tauri::WindowEvent::Focused(true) => placement::set_focused(window),
+                tauri::WindowEvent::Destroyed => placement::closed(window.app_handle(), window.label()),
                 _ => {}
             }
             if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
@@ -462,8 +561,9 @@ pub fn run() {
                         p.to_string_lossy().into_owned()
                     })
                     .collect();
+                // Only the window they were dropped on opens them.
                 if !ok.is_empty() {
-                    let _ = window.emit("dropped-files", ok);
+                    let _ = window.app_handle().emit_to(window.label(), "dropped-files", ok);
                 }
             }
         })
@@ -473,7 +573,7 @@ pub fn run() {
             recent.iter().for_each(|p| g.file(std::path::Path::new(p)));
             app.manage(Recent(Mutex::new(recent)));
             let path = configured_vault(app.handle());
-            app.manage(VaultState(Mutex::new(Vault::new(path))));
+            app.manage(VaultState(Mutex::new(Vault::new(path)), AtomicU64::new(0)));
             placement::restore(app.handle());
             // Lock after 15 minutes without use even if the window is hung or hidden, and tell the page.
             let handle = app.handle().clone();
@@ -486,13 +586,15 @@ pub fn run() {
                     was && !v.check()
                 };
                 if locked_now {
-                    let _ = handle.emit("vault-locked", ());
+                    tell_locked(&handle, "idle", "");
                 }
             });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             launch_files,
+            new_window,
+            window_front,
             read_file,
             write_file,
             pick_open,
@@ -508,6 +610,7 @@ pub fn run() {
             vault_use,
             vault_lock,
             vault_get,
+            vault_touch,
             vault_save,
             vault_passphrase,
             vault_doc_put,

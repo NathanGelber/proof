@@ -14,6 +14,10 @@ if (isDesktop) {
   ]);
 }
 
+/** This window's name. Files opened from Explorer or dropped are sent to one window only. */
+export const windowLabel = isDesktop ? winApi.getCurrentWindow().label : 'main';
+const listenHere = (name, cb) => eventApi.listen(name, cb, { target: windowLabel });
+
 const PDF_EXT = ['pdf', 'png', 'jpg', 'jpeg'], OFFICE_EXT = ['docx', 'xlsx', 'docm', 'xlsm'];
 const openFilters = office => [{ name: office ? 'PDFs, Word and Excel forms' : 'PDFs and images', extensions: office ? [...PDF_EXT, ...OFFICE_EXT] : PDF_EXT }];
 export const baseName = p => p.split(/[\\/]/).pop();
@@ -98,7 +102,12 @@ export function systemFont(bold = false) {
 
 export async function launchFiles() { return isDesktop ? core.invoke('launch_files') : []; }
 export function onEvent(name, cb) { if (isDesktop) eventApi.listen(name, e => cb(e.payload)); }
-export function onOpenFiles(cb) { if (isDesktop) eventApi.listen('open-files', e => cb(e.payload)); }
+export function onOpenFiles(cb) { if (isDesktop) listenHere('open-files', e => cb(e.payload)); }
+/** A new Proof window, empty or opening these paths (ones Proof already has access to). Desktop only. */
+export const canOpenWindows = isDesktop;
+export function newWindow(paths = []) { if (isDesktop) core.invoke('new_window', { paths }).catch(() => {}); }
+/** Bring this window to the front (and back onto a screen if it's lost). */
+export function toFront() { if (isDesktop) core.invoke('window_front').catch(() => {}); }
 
 /** Files dropped onto the window. cb(entries) with {name, path, type, bytes}; hover(true/false) for the overlay. */
 export function onDrop(cb, hover) {
@@ -109,7 +118,7 @@ export function onDrop(cb, hover) {
       else if (t === 'leave' || t === 'drop') hover(false);
     });
     // The app hands over dropped files itself, after allowing Proof to read them.
-    eventApi.listen('dropped-files', async e => {
+    listenHere('dropped-files', async e => {
       const paths = (e.payload || []).filter(p => /\.(pdf|png|jpe?g|docx|xlsx|docm|xlsm)$/i.test(p));
       if (paths.length) cb(await Promise.all(paths.map(async path => ({ name: baseName(path), path, type: mimeOf(path), bytes: await readPath(path) }))));
     });

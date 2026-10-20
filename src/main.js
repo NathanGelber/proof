@@ -217,21 +217,22 @@ async function openPaths(paths, mode) {
   if (mode === 'ask') return openOrInsert(entries);
   return openEntries(entries);
 }
-/** With a document open, ask whether new files open on their own or go into it. */
+/** With a document open, ask whether new files open on their own (in a new window) or go into it. */
 async function openOrInsert(entries) {
   entries = dropOffice(entries); if (!entries.length) return;
   if (!S.pages.length) return openEntries(entries);
+  const paths = entries.map(e => e.path), win = host.canOpenWindows && paths.every(Boolean);
   const choice = await new Promise(resolve => {
     const m = modal('Open',
-      h('p', {}, `Open ${entries.map(e => e.name).join(', ')} as its own document, or insert ${entries.length > 1 ? 'their' : 'its'} pages into ${S.title || 'the current document'}?`),
+      h('p', {}, `Open ${entries.map(e => e.name).join(', ')} ${win ? 'in a new window' : 'as its own document'}, or insert ${entries.length > 1 ? 'their' : 'its'} pages into ${S.title || 'the current document'}?`),
       h('div', { class: 'actions' },
         h('button', { class: 'btn quiet', onclick: () => { m.close(); resolve(null); } }, 'Cancel'),
         h('button', { class: 'btn', onclick: () => { m.close(); resolve('insert'); } }, 'Insert pages'),
-        h('button', { class: 'btn primary', onclick: () => { m.close(); resolve('open'); } }, 'Open')));
+        h('button', { class: 'btn primary', onclick: () => { m.close(); resolve('open'); } }, win ? 'New window' : 'Open')));
     m.scrim.addEventListener('cancel', () => resolve(null));
   });
   if (choice === 'insert') return insertEntries(entries);
-  if (choice === 'open') return openEntries(entries);
+  if (choice === 'open') return win ? host.newWindow(paths) : openEntries(entries);
 }
 
 // ---------------------------------------------------------------- saving
@@ -1328,7 +1329,7 @@ function renderEmpty() {
 
 // ---------------------------------------------------------------- keyboard shortcuts (F1)
 const SHORTCUTS = [
-  ['File', [['Ctrl+O', 'Open'], ['Ctrl+I', 'Insert file'], ['Ctrl+S', 'Save'], ['Ctrl+Shift+S', 'Save as'], ['Ctrl+P', 'Print'], ['Ctrl+W', 'Close']]],
+  ['File', [['Ctrl+N', 'New window'], ['Ctrl+O', 'Open'], ['Ctrl+I', 'Insert file'], ['Ctrl+S', 'Save'], ['Ctrl+Shift+S', 'Save as'], ['Ctrl+P', 'Print'], ['Ctrl+W', 'Close']]],
   ['Edit', [['Ctrl+Z', 'Undo'], ['Ctrl+Y', 'Redo'], ['Del', 'Delete selection'], ['Ctrl+A', 'Select all pages'], ['Ctrl+R', 'Rotate right'], ['Ctrl+Shift+R', 'Rotate left'], ['Arrows', 'Nudge (Shift: ×10)'], ['Esc', 'Finish / deselect']]],
   ['Tools', [['V', 'Select'], ['T', 'Text'], ['D', 'Date'], ['C', 'Cover'], ['R', 'Redact'], ['I', 'Image'], ['S', 'Sign']]],
   ['View', [['Ctrl+F', 'Find'], ['Ctrl+G', 'Go to page'], ['PgUp / PgDn', 'Previous / next page'], ['Home / End', 'First / last page'], ['Ctrl+= / Ctrl+−', 'Zoom'], ['Ctrl+0', 'Fit page'], ['Ctrl+1', '100%'], ['Ctrl+2', 'Fit width'], ['F1', 'This list']]],
@@ -1456,10 +1457,11 @@ document.addEventListener('keydown', e => {
   if ($('.scrim') || $('.busy')) return;
   // In the KYC workspace only document shortcuts apply, and zoom/undo only while a PDF form is on screen.
   if (mode === 'kyc' && !(e.ctrlKey || e.metaKey)) return;
-  if (mode === 'kyc' && !$('#app').classList.contains('kv-view') && !['s', 'w', 'o'].includes(e.key.toLowerCase())) return;
+  if (mode === 'kyc' && !$('#app').classList.contains('kv-view') && !['s', 'w', 'o', 'n'].includes(e.key.toLowerCase())) return;
   if (menuEl && e.key === 'Escape') { closeMenu(); return; }
   const mod = e.ctrlKey || e.metaKey, k = e.key.toLowerCase();
   if (mod) {
+    if (k === 'n' && host.canOpenWindows) { e.preventDefault(); host.newWindow(); return; }
     if (k === 'o') { e.preventDefault(); mode === 'kyc' ? kycHooks.fillNow?.(true) : doOpen(); return; }
     if (k === 'w') { e.preventDefault(); mode === 'kyc' ? kycHooks.closeForm?.() : closeDoc(); return; }
     if (k === 'i') { e.preventDefault(); doInsert(); return; }
@@ -1511,8 +1513,12 @@ const closeHandler = async () => {
 };
 closeHandler.dirty = () => S.dirty;
 host.onCloseRequested(closeHandler);
-// A PDF opened from Explorer (double-click, Open with) always lands in the PDF editor.
-host.onOpenFiles(paths => { if (mode !== 'pdf') setMode('pdf'); openPaths(paths, 'ask'); });
+// A PDF opened from Explorer (double-click, Open with) while Proof is running comes to the window used last.
+// It opens there, in the PDF editor, only if that window has nothing on the go; otherwise it gets its own window.
+host.onOpenFiles(paths => {
+  if (S.pages.length || kycHooks.busy?.() || $('.scrim') || $('.busy')) return host.newWindow(paths);
+  host.toFront(); if (mode !== 'pdf') setMode('pdf'); openPaths(paths, 'open');
+});
 
 try { if (localStorage.getItem(MODE_KEY) === 'kyc') setMode('kyc'); } catch {}
 renderAll();
