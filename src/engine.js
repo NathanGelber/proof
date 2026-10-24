@@ -14,7 +14,7 @@ export { pdfjsLib };
 
 let muP = null;
 export const mupdf = () => (muP ||= import('mupdf'));
-export class Cancelled extends Error {}
+export class Cancelled extends Error { constructor() { super('No password was entered.'); } }
 
 const take = buf => { const a = buf.asUint8Array().slice(); buf.destroy?.(); return a; };
 

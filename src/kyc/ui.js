@@ -526,8 +526,8 @@ function libraryView(ent) {
     h('div', { class: 'btns' }, h('button', { class: 'btn', onclick: () => importForms(ent) }, 'Learn from forms…')), q, list);
 }
 
-export async function pdfDoc(bytes) {
-  const prep = await prepare(bytes, async () => null);
+export async function pdfDoc(bytes, name = 'This file') {
+  const prep = await prepare(bytes, attempt => C.askPassword(name, attempt));
   const pdf = await pdfjsLib.getDocument({ data: prep.bytes.slice(), isEvalSupported: false }).promise;
   const proxies = []; for (let i = 0; i < pdf.numPages; i++) proxies.push(await pdf.getPage(i + 1));
   return { bytes: prep.bytes, proxies, pdf };
@@ -544,7 +544,7 @@ async function importForms(ent) {
       let descs;
       if (isOfficeName(f.name)) descs = (await loadOffice(f.bytes, f.name)).slots;
       else {
-        const doc = await pdfDoc(f.bytes);
+        const doc = await pdfDoc(f.bytes, f.name);
         const lines = await pageLines(doc); const fields = await describeFields(doc, lines);
         descs = fields.length ? fields : flatLines(lines).filter(l => !l.heading && isQuestionLine(l)).map(l => ({ kind: 'text', tip: lineLabel(l.text), left: '', above: '', inside: '', right: '', below: '', nice: '', section: '', ctx: [], options: [], page: l.page, near: '' }));
         doc.pdf.destroy?.();

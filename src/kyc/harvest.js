@@ -17,8 +17,8 @@ let C = null;
 export function initHarvest(ctx) { C = ctx; }
 
 // ---------------------------------------------------------------- reading answers from PDFs
-async function pdfAnswers(bytes) {
-  const doc = await pdfDoc(bytes);
+async function pdfAnswers(bytes, name) {
+  const doc = await pdfDoc(bytes, name);
   try {
     const lines = await pageLines(doc);
     const fields = await describeFields(doc, lines);
@@ -115,7 +115,7 @@ export async function harvestForm(ent) {
   const f = picked[0]; if (!f) return;
   if (!isOfficeName(f.name) && !/\.pdf$/i.test(f.name)) { C.toast('Use a filled PDF, Word or Excel form.', 6000); return; }
   const b = C.busy('Reading the answers…'); let answers;
-  try { answers = isOfficeName(f.name) ? await readAnswers(f.bytes, f.name) : await pdfAnswers(f.bytes); }
+  try { answers = isOfficeName(f.name) ? await readAnswers(f.bytes, f.name) : await pdfAnswers(f.bytes, f.name); }
   catch (e) { b.done(); C.toast('Couldn’t read that form: ' + (e?.message || e), 8000); return; }
   b.done();
   if (!answers.length) { C.toast(`No answers found in ${f.name}.`, 8000); return; }

@@ -105,6 +105,8 @@ async function askPassword(name, attempt) {
     function ok() { m.close(); resolve(inp.value); }
     inp.addEventListener('keydown', e => { if (e.key === 'Enter') ok(); });
     m.scrim.addEventListener('cancel', () => resolve(null));
+    // Asked while a file is opening, so it must sit above the busy overlay or it can't be seen or clicked.
+    m.scrim.classList.add('over-busy');
   });
 }
 
@@ -1428,7 +1430,7 @@ const kycText = {
   pos(id) { const { p, it } = findText(id); if (!it) return null; return { page: p.idx, x: it.x, y: it.y + (1.2 * it.text.split('\n').length - 0.95) * it.size, size: it.size }; },
   select(id) { const { p, it } = findText(id); if (!it) return; revealRect(p.doc, p.idx, [it.x, it.y, 10, it.size]); selectItem(p.uid, id); },
 };
-initKyc({ S, h, sec, modal, toast, busy, commit: () => commit(), renderInsp, updateChrome, insertEntries, openEntries, placeText, hooks: kycHooks, redrawDoc, revealRect, text: kycText, setTab: t => { S.itab = t; renderTabs(); renderInsp(); }, setMode, mode: () => mode, save: () => save(false), saveCopy: suffix => save(true, suffix), closeDoc, relayout: () => layoutView() });
+initKyc({ S, h, sec, modal, toast, busy, askPassword, commit: () => commit(), renderInsp, updateChrome, insertEntries, openEntries, placeText, hooks: kycHooks, redrawDoc, revealRect, text: kycText, setTab: t => { S.itab = t; renderTabs(); renderInsp(); }, setMode, mode: () => mode, save: () => save(false), saveCopy: suffix => save(true, suffix), closeDoc, relayout: () => layoutView() });
 
 document.addEventListener('keydown', e => {
   // Webview shortcuts (reload, browser find, print the app UI…) are replaced by the app's own.
